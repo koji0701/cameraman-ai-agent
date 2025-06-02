@@ -1,5 +1,7 @@
 .env
-videos/
-outputs/
+
 .venv/
 .cursor
+videos/
+outputs/
+pipelines/__pycache__/
