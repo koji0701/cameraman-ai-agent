@@ -27,6 +27,10 @@ def get_video_info(input_video_path: str) -> Dict:
         # Extract video stream info
         video_stream = next(s for s in info['streams'] if s['codec_type'] == 'video')
         
+        # Check for audio stream
+        audio_stream = next((s for s in info['streams'] if s['codec_type'] == 'audio'), None)
+        has_audio = audio_stream is not None
+        
         return {
             'width': int(video_stream['width']),
             'height': int(video_stream['height']),
@@ -35,7 +39,9 @@ def get_video_info(input_video_path: str) -> Dict:
             'bitrate': int(video_stream.get('bit_rate', 0)),
             'codec': video_stream['codec_name'],
             'pixel_format': video_stream['pix_fmt'],
-            'total_frames': int(video_stream['nb_frames']) if 'nb_frames' in video_stream else None
+            'total_frames': int(video_stream['nb_frames']) if 'nb_frames' in video_stream else None,
+            'has_audio': has_audio,
+            'audio_codec': audio_stream['codec_name'] if has_audio else None
         }
     except Exception as e:
         print(f"⚠️ Could not get video info: {e}")
@@ -134,11 +140,16 @@ def render_cropped_video_dynamic(
     # Get video information
     video_info = get_video_info(input_video_path)
     fps = video_info.get('fps', 29.97)
+    has_audio = video_info.get('has_audio', False)
     
     print(f"🎬 Dynamic Cropping Render")
     print(f"Input: {input_video_path}")
     print(f"Resolution: {video_info.get('width', '?')}x{video_info.get('height', '?')} @ {fps:.2f}fps")
     print(f"Frames to process: {len(smoothed_coords_df)}")
+    if has_audio:
+        print(f"Audio: {video_info.get('audio_codec', 'unknown')}")
+    else:
+        print("Audio: None (video only)")
     
     # Create sendcmd file for dynamic cropping
     sendcmd_file = output_video_path.replace('.mp4', '_sendcmd.txt')
@@ -194,11 +205,13 @@ def render_cropped_video_dynamic(
         '-i', input_video_path,
         '-filter_complex', filter_complex,
         '-map', '[final]',
-        '-map', '0:a',  # Copy audio
         '-c:v', video_codec,
         '-b:v', bitrate,
-        '-c:a', audio_codec,
     ]
+    
+    # Add audio mapping only if audio exists
+    if has_audio:
+        cmd.extend(['-map', '0:a', '-c:a', audio_codec])
     
     # Add codec-specific options
     if video_codec == 'h264_videotoolbox':
@@ -382,80 +395,67 @@ def render_cropped_video_simple(
     verbose: bool = True
 ) -> bool:
     """
-    Render cropped video using a simpler approach with average crop coordinates.
+    Render a statically‑cropped video (average crop) in one pass.
     """
-    
-    # Calculate average crop coordinates for a static crop
+
+    # --- gather basic info --------------------------------------------------
+    video_info = get_video_info(input_video_path)
+    has_audio = video_info.get('has_audio', False)
+
+    # average crop rectangle (ensure even dims)
     avg_x = int(smoothed_coords_df['crop_x'].mean())
     avg_y = int(smoothed_coords_df['crop_y'].mean())
-    avg_w = int(smoothed_coords_df['crop_w'].mean())
-    avg_h = int(smoothed_coords_df['crop_h'].mean())
-    
-    # Ensure even dimensions
-    avg_w = avg_w - (avg_w % 2)
-    avg_h = avg_h - (avg_h % 2)
-    
+    avg_w = int(smoothed_coords_df['crop_w'].mean()) & ~1  # even width
+    avg_h = int(smoothed_coords_df['crop_h'].mean()) & ~1  # even height
+
     print(f"Using average crop: {avg_w}x{avg_h} at ({avg_x},{avg_y})")
-    
-    # Ensure output directory exists
+    print("Audio stream:" + (" present" if has_audio else " none"))
+
+    # -----------------------------------------------------------------------
     os.makedirs(os.path.dirname(output_video_path), exist_ok=True)
-    
-    # Build simple FFmpeg command with static crop
+
+    # build safe filter graph:
+    #   1) crop  ➜  2) scale  ➜  label [outv]
+    filter_graph = (
+        f"[0:v]crop={avg_w}:{avg_h}:{avg_x}:{avg_y},"
+        f"scale={scale_resolution}[outv]"
+    )
+
     cmd = [
-        'ffmpeg',
-        '-y',  # Overwrite output file
-        '-i', input_video_path,
-        '-filter_complex', f'[0:v]crop={avg_w}:{avg_h}:{avg_x}:{avg_y}[cropped];[cropped]scale={scale_resolution}',
-        '-c:v', video_codec,
-        '-b:v', bitrate,
-        '-c:a', audio_codec,
-        '-map', '0:a',
-        '-vsync', '2',
+        "ffmpeg", "-y",
+        "-i", input_video_path,
+        "-filter_complex", filter_graph,
+        "-map", "[outv]",
+        "-c:v", video_codec,
+        "-b:v", bitrate,
+        "-fps_mode", "cfr",
     ]
-    
-    # Add hardware acceleration flags for Apple Silicon
-    if video_codec == 'h264_videotoolbox':
-        cmd.extend(['-allow_sw', '1'])
-    
+
+    if has_audio:
+        cmd.extend(["-map", "0:a", "-c:a", audio_codec])
+
+    if video_codec == "h264_videotoolbox":
+        cmd.extend(["-allow_sw", "1"])
+
     cmd.append(output_video_path)
-    
-    print(f"🎬 Rendering video with static crop...")
-    print(f"Input: {input_video_path}")
-    print(f"Output: {output_video_path}")
-    print(f"Codec: {video_codec} @ {bitrate}")
-    
+
     if verbose:
-        print(f"FFmpeg command: {' '.join(cmd)}")
-    
+        print("FFmpeg command:", " ".join(cmd))
+
     try:
-        process = subprocess.run(
-            cmd,
-            capture_output=not verbose,
-            text=True,
-            check=True
-        )
-        
-        print(f"✅ Video rendered successfully!")
-        print(f"Output file: {output_video_path}")
-        
-        if os.path.exists(output_video_path):
-            file_size = os.path.getsize(output_video_path) / (1024 * 1024)
-            print(f"File size: {file_size:.1f} MB")
-        
+        subprocess.run(cmd, capture_output=not verbose, text=True, check=True)
+        size_mb = os.path.getsize(output_video_path) / (1024 * 1024)
+        print(f"✅ Video rendered – {size_mb:.1f} MB")
         return True
-        
     except subprocess.CalledProcessError as e:
         print(f"❌ FFmpeg error: {e}")
-        if e.stdout:
-            print("STDOUT:", e.stdout)
         if e.stderr:
             print("STDERR:", e.stderr)
         return False
-    
     except FileNotFoundError:
-        print("❌ FFmpeg not found. Please install FFmpeg first.")
-        print("Install with: brew install ffmpeg")
+        print("❌ FFmpeg binary not found. Install FFmpeg first.")
         return False
+
 
 
 def render_cropped_video(
