@@ -356,27 +356,26 @@ def analyze_motion_smoothness(smoothed_df: pd.DataFrame, fps: float) -> Dict:
     
     return metrics
 
-
 def generate_smooth_ffmpeg_filter(smoothed_df: pd.DataFrame) -> str:
-    """
-    Generate FFmpeg sendcmd filter from smoothed frame-by-frame coordinates.
-    """
-    
+    """Build a valid sendcmd text (one option per line)."""
     if smoothed_df.empty:
         raise ValueError("No smoothed coordinates provided")
-    
-    crop_commands = []
-    
-    for _, row in smoothed_df.iterrows():
-        timestamp = row['t_ms'] / 1000.0  # Convert to seconds
-        x, y, w, h = int(row['crop_x']), int(row['crop_y']), int(row['crop_w']), int(row['crop_h'])
-        
-        # FFmpeg sendcmd format: timestamp [enter] cropfilter w h x y
-        crop_commands.append(f"{timestamp:.3f} [enter] crop w {w} h {h} x {x} y {y};")
-    
-    return '\n'.join(crop_commands)
 
-
+    rows: list[str] = []
+    for _, r in smoothed_df.iterrows():
+        t = r["t_ms"] / 1000.0
+        w = int(r["crop_w"]) & ~1
+        h = int(r["crop_h"]) & ~1
+        x = int(r["crop_x"])
+        y = int(r["crop_y"])
+        # one option per line ➜ w, h, x, y
+        rows.extend([
+            f"{t:.3f} crop w {w}",
+            f"{t:.3f} crop h {h}",
+            f"{t:.3f} crop x {x}",
+            f"{t:.3f} crop y {y}",
+        ])
+    return "\n".join(rows)
 if __name__ == "__main__":
     # Test with normalized crop data
     test_normalized = pd.DataFrame({

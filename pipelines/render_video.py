@@ -46,39 +46,37 @@ def get_video_info(input_video_path: str) -> Dict:
     except Exception as e:
         print(f"⚠️ Could not get video info: {e}")
         return {}
-
-
 def generate_sendcmd_filter(smoothed_coords_df: pd.DataFrame, fps: float = 29.97) -> str:
+    """Return a valid *file* for the sendcmd filter.
+
+    Each line must terminate with a semicolon so the parser can
+    unambiguously detect the end‑of‑command.  Syntax (one option per line):
+
+        <pts‑seconds> <target> <option> <value>;
+
+    where <target> for our graph is simply the *crop* filter (unnamed), and
+    <option> ∈ {w, h, x, y}.  The trailing semicolon is **required** — omitting
+    it triggers the “Missing separator or extraneous data” error you saw.
     """
-    Generate FFmpeg sendcmd filter for dynamic frame-by-frame cropping.
-    
-    Args:
-        smoothed_coords_df: DataFrame with crop coordinates per frame
-        fps: Video frame rate
-        
-    Returns:
-        FFmpeg sendcmd filter string
-    """
-    commands = []
-    
-    for idx, row in smoothed_coords_df.iterrows():
-        timestamp = row['frame_number'] / fps
-        
-        # Ensure even dimensions for codec compatibility
-        w = int(row['crop_w']) - (int(row['crop_w']) % 2)
-        h = int(row['crop_h']) - (int(row['crop_h']) % 2)
-        x = int(row['crop_x'])
-        y = int(row['crop_y'])
-        
-        # FFmpeg sendcmd format: timestamp [enter] filtername param1 value1 param2 value2;
-        cmd = f"{timestamp:.3f} [enter] crop w {w} h {h} x {x} y {y};"
-        commands.append(cmd)
-    
-    # Create sendcmd filter
-    sendcmd_content = "\\n".join(commands)
-    sendcmd_filter = f"sendcmd=c='{sendcmd_content}'"
-    
-    return sendcmd_filter
+    if smoothed_coords_df.empty:
+        raise ValueError("No crop data supplied")
+
+    rows: list[str] = []
+    for _, r in smoothed_coords_df.iterrows():
+        t = r["t_ms"] / 1000.0
+        w = int(r["crop_w"]) & ~1  # ensure even
+        h = int(r["crop_h"]) & ~1
+        x = int(r["crop_x"])
+        y = int(r["crop_y"])
+
+        rows.extend([
+            f"{t:.3f} crop w {w};",
+            f"{t:.3f} crop h {h};",
+            f"{t:.3f} crop x {x};",
+            f"{t:.3f} crop y {y};",
+        ])
+
+    return "".join(rows)
 
 
 def create_dynamic_crop_filter(smoothed_coords_df: pd.DataFrame, fps: float = 29.97) -> str:
@@ -103,189 +101,97 @@ def create_dynamic_crop_filter(smoothed_coords_df: pd.DataFrame, fps: float = 29
     
     return filter_graph
 
-
 def render_cropped_video_dynamic(
     input_video_path: str,
     output_video_path: str,
     smoothed_coords_df: pd.DataFrame,
-    video_codec: str = 'h264_videotoolbox',
-    quality_preset: str = 'medium',
-    bitrate: str = '15M',
-    scale_resolution: str = '1920:1080',
-    audio_codec: str = 'aac',
+    video_codec: str = "h264_videotoolbox",
+    quality_preset: str = "medium",
+    bitrate: str = "15M",
+    scale_resolution: str = "1920:1080",
+    audio_codec: str = "aac",
     enable_stabilization: bool = False,
     color_correction: bool = False,
-    verbose: bool = True
+    verbose: bool = True,
 ) -> bool:
-    """
-    Render video with dynamic frame-by-frame cropping using FFmpeg sendcmd.
-    
-    Args:
-        input_video_path: Source video file
-        output_video_path: Output video file
-        smoothed_coords_df: DataFrame with smooth crop coordinates
-        video_codec: Video codec to use
-        quality_preset: Encoding quality preset
-        bitrate: Target bitrate
-        scale_resolution: Final resolution
-        audio_codec: Audio codec
-        enable_stabilization: Apply video stabilization
-        color_correction: Apply color correction
-        verbose: Print detailed output
-        
-    Returns:
-        Success status
-    """
-    
-    # Get video information
+    """Render the video with per‑frame dynamic cropping (sendcmd‑steered)."""
+    # ── probe input ───────────────────────────────────────────────────────
     video_info = get_video_info(input_video_path)
-    fps = video_info.get('fps', 29.97)
-    has_audio = video_info.get('has_audio', False)
-    
-    print(f"🎬 Dynamic Cropping Render")
-    print(f"Input: {input_video_path}")
-    print(f"Resolution: {video_info.get('width', '?')}x{video_info.get('height', '?')} @ {fps:.2f}fps")
-    print(f"Frames to process: {len(smoothed_coords_df)}")
-    if has_audio:
-        print(f"Audio: {video_info.get('audio_codec', 'unknown')}")
-    else:
-        print("Audio: None (video only)")
-    
-    # Create sendcmd file for dynamic cropping
-    sendcmd_file = output_video_path.replace('.mp4', '_sendcmd.txt')
-    
-    commands = []
-    for idx, row in smoothed_coords_df.iterrows():
-        timestamp = row['frame_number'] / fps
-        
-        # Ensure even dimensions
-        w = int(row['crop_w']) - (int(row['crop_w']) % 2)
-        h = int(row['crop_h']) - (int(row['crop_h']) % 2)
-        x = int(row['crop_x'])
-        y = int(row['crop_y'])
-        
-        cmd = f"{timestamp:.3f} [enter] crop w {w} h {h} x {x} y {y};"
-        commands.append(cmd)
-    
-    # Write sendcmd file
-    with open(sendcmd_file, 'w') as f:
-        f.write('\n'.join(commands))
-    
-    # Build complex filter graph
-    filters = []
-    
-    # Dynamic cropping with sendcmd
-    filters.append(f"[0:v]sendcmd=f='{sendcmd_file}',crop=w=1920:h=1080[cropped]")
-    
-    # Optional stabilization
-    if enable_stabilization:
-        filters.append("[cropped]vidstabdetect=stepsize=6:shakiness=8:accuracy=9:result=/tmp/transforms.trf[stab_detect]")
-        filters.append("[stab_detect]vidstabtransform=input=/tmp/transforms.trf:zoom=1:smoothing=30[stabilized]")
-        current_label = "stabilized"
-    else:
-        current_label = "cropped"
-    
-    # Optional color correction
-    if color_correction:
-        filters.append(f"[{current_label}]eq=contrast=1.1:brightness=0.02:saturation=1.1[color_corrected]")
-        current_label = "color_corrected"
-    
-    # Final scaling
-    filters.append(f"[{current_label}]scale={scale_resolution}:flags=lanczos[final]")
-    
-    filter_complex = ';'.join(filters)
-    
-    # Ensure output directory exists
-    os.makedirs(os.path.dirname(output_video_path), exist_ok=True)
-    
-    # Build FFmpeg command
-    cmd = [
-        'ffmpeg',
-        '-y',  # Overwrite output
-        '-i', input_video_path,
-        '-filter_complex', filter_complex,
-        '-map', '[final]',
-        '-c:v', video_codec,
-        '-b:v', bitrate,
-    ]
-    
-    # Add audio mapping only if audio exists
-    if has_audio:
-        cmd.extend(['-map', '0:a', '-c:a', audio_codec])
-    
-    # Add codec-specific options
-    if video_codec == 'h264_videotoolbox':
-        cmd.extend([
-            '-allow_sw', '1',
-            '-realtime', '0',
-            '-profile:v', 'high',
-            '-level:v', '4.1'
-        ])
-        
-        # Quality presets for VideoToolbox
-        quality_map = {
-            'fast': ['-q:v', '30'],
-            'medium': ['-q:v', '25'], 
-            'slow': ['-q:v', '20'],
-            'best': ['-q:v', '15']
-        }
-        if quality_preset in quality_map:
-            cmd.extend(quality_map[quality_preset])
-    
-    elif video_codec == 'libx264':
-        cmd.extend([
-            '-preset', quality_preset,
-            '-tune', 'film',
-            '-movflags', '+faststart'
-        ])
-    
-    cmd.append(output_video_path)
-    
-    print(f"🎨 Applying {len(smoothed_coords_df)} dynamic crop adjustments...")
-    if enable_stabilization:
-        print("📹 Video stabilization enabled")
-    if color_correction:
-        print("🎨 Color correction enabled")
-    
-    if verbose:
-        print(f"FFmpeg command: {' '.join(cmd)}")
-    
-    try:
-        process = subprocess.run(
-            cmd,
-            capture_output=not verbose,
-            text=True,
-            check=True
-        )
-        
-        print(f"✅ Dynamic crop video rendered successfully!")
-        
-        # Clean up temporary files
-        if os.path.exists(sendcmd_file):
-            os.remove(sendcmd_file)
-        if os.path.exists('/tmp/transforms.trf'):
-            os.remove('/tmp/transforms.trf')
-        
-        if os.path.exists(output_video_path):
-            file_size = os.path.getsize(output_video_path) / (1024 * 1024)
-            print(f"Output: {output_video_path}")
-            print(f"File size: {file_size:.1f} MB")
-        
-        return True
-        
-    except subprocess.CalledProcessError as e:
-        print(f"❌ FFmpeg error: {e}")
-        if e.stdout:
-            print("STDOUT:", e.stdout)
-        if e.stderr:
-            print("STDERR:", e.stderr)
-        return False
-    
-    except FileNotFoundError:
-        print("❌ FFmpeg not found. Please install FFmpeg first.")
-        print("Install with: brew install ffmpeg")
-        return False
+    fps       = video_info.get("fps", 29.97)
+    has_audio = video_info.get("has_audio", False)
 
+    print("🎬 Dynamic Cropping Render")
+    print(f"Input: {input_video_path}")
+    print(f"Resolution: {video_info.get('width')}x{video_info.get('height')} @ {fps:.2f} fps")
+    print(f"Frames to process: {len(smoothed_coords_df)}")
+    print("Audio:", "present" if has_audio else "none")
+
+    # ── build sendcmd text file ──────────────────────────────────────────
+    sendcmd_file = output_video_path.replace(".mp4", "_sendcmd.txt")
+    with open(sendcmd_file, "w") as f:
+        f.write(generate_sendcmd_filter(smoothed_coords_df, fps))
+
+    # ── build filter graph ───────────────────────────────────────────────
+    filters: list[str] = [
+        f"[0:v]sendcmd=f='{sendcmd_file}',crop=w=iw:h=ih:x=0:y=0[cropped]"
+    ]
+
+    label = "cropped"
+    if enable_stabilization:
+        filters.extend([
+            f"[{label}]vidstabdetect=stepsize=6:shakiness=8:accuracy=9:result=/tmp/transforms.trf[stabdetect]",
+            "[stabdetect]vidstabtransform=input=/tmp/transforms.trf:zoom=1:smoothing=30[stabilized]"
+        ])
+        label = "stabilized"
+
+    if color_correction:
+        filters.append(f"[{label}]eq=contrast=1.1:brightness=0.02:saturation=1.1[cc]")
+        label = "cc"
+
+    filters.append(f"[{label}]scale={scale_resolution}:flags=lanczos[final]")
+    filter_complex = ";".join(filters)
+
+    # ── ensure output dir exists ─────────────────────────────────────────
+    os.makedirs(os.path.dirname(output_video_path), exist_ok=True)
+
+    # ── build ffmpeg argv ────────────────────────────────────────────────
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", input_video_path,
+        "-filter_complex", filter_complex,
+        "-map", "[final]",
+        "-c:v", video_codec,
+        "-b:v", bitrate,
+    ]
+
+    if has_audio:
+        cmd.extend(["-map", "0:a", "-c:a", audio_codec])
+
+    if video_codec == "h264_videotoolbox":
+        cmd.extend(["-allow_sw", "1", "-realtime", "0", "-profile:v", "high", "-level:v", "4.1"])
+
+    cmd.append(output_video_path)
+
+    if verbose:
+        print("FFmpeg command:", " ".join(cmd))
+
+    # ── run ffmpeg ───────────────────────────────────────────────────────
+    try:
+        subprocess.run(cmd, capture_output=not verbose, text=True, check=True)
+        size_mb = os.path.getsize(output_video_path) / (1024 * 1024)
+        print(f"✅ Dynamic‑crop video rendered ({size_mb:.1f} MB)")
+        os.remove(sendcmd_file)
+        if os.path.exists("/tmp/transforms.trf"):
+            os.remove("/tmp/transforms.trf")
+        return True
+    except subprocess.CalledProcessError as e:
+        print("❌ FFmpeg error:", e)
+        if e.stderr:
+            print(e.stderr)
+        return False
+    except FileNotFoundError:
+        print("❌ FFmpeg binary not found.")
+        return False
 
 def render_multipass_video(
     input_video_path: str,
