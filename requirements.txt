@@ -1,0 +1,23 @@
+# AI Cameraman Dependencies
+
+# Google AI/Gemini
+google-genai>=0.7.0
+
+# FastAPI and web framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+aiofiles>=23.2.1
+
+# Mathematical processing
+numpy>=1.24.0
+pandas>=2.1.0
+scipy>=1.11.0
+filterpy>=1.4.5
+
+# Video processing
+av>=10.0.0
+
+# Utilities
+pydantic>=2.4.0
+python-dotenv>=1.0.0 
