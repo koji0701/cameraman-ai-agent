@@ -5,6 +5,8 @@ from filterpy.kalman import KalmanFilter
 from filterpy.common import Q_discrete_white_noise
 from typing import Tuple, Dict
 import av
+from pathlib import Path
+import json
 
 
 def interpolate_and_smooth_coordinates(
@@ -12,63 +14,75 @@ def interpolate_and_smooth_coordinates(
     video_path: str = None,
     target_fps: float = None,
     smoothing_strength: str = 'balanced',
-    interpolation_method: str = 'cubic'
+    interpolation_method: str = 'cubic',
+    enable_debug_outputs: bool = False,
+    debug_outputs_dir: str = None
 ) -> pd.DataFrame:
-    """
-    Complete pipeline: Interpolate crop coordinates to per-frame and apply Kalman smoothing.
+    """Complete pipeline: Interpolate crop coordinates to per-frame and apply Kalman smoothing."""
     
-    Args:
-        normalized_crops: DataFrame with columns ['t_ms', 'crop_x', 'crop_y', 'crop_w', 'crop_h']
-        video_path: Path to video file (for FPS detection) 
-        target_fps: Target frame rate (if video_path not provided)
-        smoothing_strength: 'minimal', 'balanced', 'maximum', or 'cinematic'
-        interpolation_method: 'cubic', 'linear', or 'quadratic'
-        
-    Returns:
-        DataFrame with smoothed per-frame coordinates
-    """
+    if enable_debug_outputs and debug_outputs_dir:
+        interpolation_config = {
+            "input_keyframes": len(normalized_crops),
+            "smoothing_strength": smoothing_strength,
+            "interpolation_method": interpolation_method,
+            "target_fps": target_fps,
+            "video_path": video_path
+        }
+        save_kalman_step_data(interpolation_config, "03_interpolation_config", debug_outputs_dir, "Kalman filter configuration")
     
-    if normalized_crops.empty:
-        raise ValueError("No normalized crop coordinates provided")
+    fps = target_fps
+    if fps is None and video_path:
+        fps = detect_video_fps(video_path)
+        print(f"Detected video FPS: {fps}")
+    if fps is None:
+        fps = 30.0
+        print(f"Using default FPS: {fps}")
     
-    # Detect video FPS if not provided
-    if target_fps is None:
-        if video_path is None:
-            target_fps = 30.0  # Default fallback
-            print("Warning: No video path or FPS provided, using 30 FPS default")
-        else:
-            target_fps = detect_video_fps(video_path)
-            print(f"Detected video FPS: {target_fps}")
+    print(f"Interpolating coordinates from {len(normalized_crops)} keyframes to {fps} FPS...")
+    interpolated_df = interpolate_coordinates_to_frames(normalized_crops, fps, method=interpolation_method)
     
-    # Step 1: Interpolate coordinates to per-frame timeline
-    print(f"Interpolating {len(normalized_crops)} keyframes to {target_fps} FPS...")
-    interpolated_df = interpolate_coordinates_to_frames(
-        normalized_crops, target_fps, interpolation_method
-    )
+    if enable_debug_outputs and debug_outputs_dir:
+        save_kalman_step_data(interpolated_df, "03_interpolated_coordinates", debug_outputs_dir, f"Interpolated to {len(interpolated_df)} frames")
     
-    # Step 2: Apply Kalman filtering for smooth motion
-    print(f"Applying Kalman smoothing ({smoothing_strength} mode)...")
+    print(f"Applying Kalman smoothing (strength: {smoothing_strength})...")
     smoothed_df = apply_kalman_smoothing(
-        interpolated_df, target_fps, smoothing_strength
+        interpolated_df,
+        fps,
+        smoothing_strength=smoothing_strength,
+        enable_debug_outputs=enable_debug_outputs,
+        debug_outputs_dir=debug_outputs_dir
     )
     
-    # Step 3: Validate and constrain final coordinates
-    smoothed_df = validate_and_constrain_coordinates(smoothed_df)
+    print(f"Final validation and constraint checking...")
+    final_df = validate_and_constrain_coordinates(smoothed_df)
     
-    print(f"Generated {len(smoothed_df)} smooth frames")
-    return smoothed_df
+    if enable_debug_outputs and debug_outputs_dir:
+        save_kalman_step_data(final_df, "03_final_smoothed_coordinates", debug_outputs_dir, f"Final validated coordinates for {len(final_df)} frames")
+        
+        before_after_comparison = {
+            "original_keyframes": len(normalized_crops),
+            "interpolated_frames": len(interpolated_df),
+            "final_smooth_frames": len(final_df),
+            "fps_used": fps,
+            "duration_seconds": len(final_df) / fps,
+            "smoothing_applied": smoothing_strength,
+            "interpolation_method": interpolation_method
+        }
+        save_kalman_step_data(before_after_comparison, "03_smoothing_summary", debug_outputs_dir, "Complete smoothing pipeline summary")
+    
+    print(f"✓ Kalman smoothing complete: {len(normalized_crops)} → {len(final_df)} frames")
+    return final_df
 
 
 def detect_video_fps(video_path: str) -> float:
-    """Detect video frame rate using PyAV"""
+    """Detect the FPS of a video file using PyAV."""
     try:
         with av.open(video_path) as container:
-            video_stream = container.streams.video[0]
-            fps = float(video_stream.average_rate)
+            fps = float(container.streams.video[0].average_rate)
             return fps
     except Exception as e:
-        print(f"Warning: Could not detect FPS from {video_path}: {e}")
-        return 30.0  # Default fallback
+        print(f"Warning: Could not detect FPS ({e}), using default 30.0")
+        return 30.0
 
 
 def interpolate_coordinates_to_frames(
@@ -76,144 +90,142 @@ def interpolate_coordinates_to_frames(
     fps: float,
     method: str = 'cubic'
 ) -> pd.DataFrame:
-    """
-    Interpolate crop coordinates from keyframes to per-frame timeline.
-    """
+    """Interpolate sparse keyframe coordinates to per-frame coordinates."""
     
-    # Extract timestamps and coordinates
-    timestamps_ms = normalized_crops['t_ms'].values
-    coords = normalized_crops[['crop_x', 'crop_y', 'crop_w', 'crop_h']].values
+    if len(normalized_crops) < 2:
+        raise ValueError("Need at least 2 keyframes for interpolation")
     
-    # Create per-frame timeline
-    start_time = timestamps_ms.min()
-    end_time = timestamps_ms.max()
-    frame_interval_ms = 1000.0 / fps
+    keyframe_times = normalized_crops['t_ms'].values / 1000.0
+    max_time = keyframe_times[-1]
     
-    frame_timestamps = np.arange(start_time, end_time + frame_interval_ms, frame_interval_ms)
+    frame_times = np.arange(0, max_time + 1/fps, 1/fps)
     
-    # Interpolate each coordinate dimension
-    interpolated_coords = np.zeros((len(frame_timestamps), 4))
-    coord_names = ['crop_x', 'crop_y', 'crop_w', 'crop_h']
+    coord_columns = ['crop_x', 'crop_y', 'crop_w', 'crop_h']
+    interpolated_coords = {}
     
-    for i, coord_name in enumerate(coord_names):
-        if method == 'cubic':
-            # Use cubic spline for smooth C² continuity
-            spline = CubicSpline(
-                timestamps_ms, coords[:, i], 
-                bc_type='natural',  # Natural boundary conditions
-                extrapolate=False
-            )
-            interpolated_coords[:, i] = spline(frame_timestamps)
-            
-        elif method == 'quadratic':
-            # Quadratic spline for less aggressive smoothing
+    for col in coord_columns:
+        values = normalized_crops[col].values
+        
+        if method == 'cubic' and len(normalized_crops) >= 4:
+            spline = CubicSpline(keyframe_times, values, bc_type='natural')
+            interpolated_coords[col] = spline(frame_times)
+        elif method == 'quadratic' and len(normalized_crops) >= 3:
             from scipy.interpolate import interp1d
-            interp_func = interp1d(timestamps_ms, coords[:, i], kind='quadratic', 
-                                 fill_value='extrapolate')
-            interpolated_coords[:, i] = interp_func(frame_timestamps)
-            
-        elif method == 'linear':
-            # Linear interpolation for minimal processing
-            interpolated_coords[:, i] = np.interp(frame_timestamps, timestamps_ms, coords[:, i])
+            interp_func = interp1d(keyframe_times, values, kind='quadratic', bounds_error=False, fill_value='extrapolate')
+            interpolated_coords[col] = interp_func(frame_times)
+        else:
+            from scipy.interpolate import interp1d
+            interp_func = interp1d(keyframe_times, values, kind='linear', bounds_error=False, fill_value='extrapolate')
+            interpolated_coords[col] = interp_func(frame_times)
     
-    # Create result DataFrame
     result_df = pd.DataFrame({
-        't_ms': frame_timestamps,
-        'frame_number': np.arange(len(frame_timestamps)),
-        'crop_x': interpolated_coords[:, 0],
-        'crop_y': interpolated_coords[:, 1], 
-        'crop_w': interpolated_coords[:, 2],
-        'crop_h': interpolated_coords[:, 3]
+        't_ms': frame_times * 1000,
+        'frame_number': np.arange(len(frame_times)),
+        **interpolated_coords
     })
     
     return result_df
 
 
+def save_kalman_step_data(data, step_name: str, output_dir: str, description: str = ""):
+    """Save Kalman filter step data to debug outputs."""
+    if not output_dir:
+        return
+        
+    output_path = Path(output_dir) / f"step_{step_name}.csv" if isinstance(data, pd.DataFrame) else Path(output_dir) / f"step_{step_name}.json"
+    
+    try:
+        if isinstance(data, pd.DataFrame):
+            data.to_csv(output_path, index=False)
+        else:
+            with open(output_path, 'w') as f:
+                json.dump(data, f, indent=2, default=str)
+        
+        print(f"🔍 KALMAN DEBUG: Saved {step_name} → {output_path}")
+        if description:
+            print(f"                  {description}")
+            
+    except Exception as e:
+        print(f"⚠️ Could not save {step_name}: {e}")
+
+
 def apply_kalman_smoothing(
     interpolated_df: pd.DataFrame,
     fps: float,
-    smoothing_strength: str = 'balanced'
+    smoothing_strength: str = 'balanced',
+    enable_debug_outputs: bool = False,
+    debug_outputs_dir: str = None
 ) -> pd.DataFrame:
-    """
-    Apply Kalman filtering to smooth coordinate trajectories.
-    """
+    """Apply Kalman filtering to smooth interpolated coordinates."""
     
-    # Configure Kalman filter parameters based on smoothing strength
-    kalman_configs = {
-        'minimal': {
-            'process_noise': 0.1,
-            'measurement_noise': 1.0,
-            'description': 'Light smoothing, preserves original motion'
-        },
-        'balanced': {
-            'process_noise': 0.05,
-            'measurement_noise': 2.0,
-            'description': 'Balanced smoothing for professional results'
-        },
-        'maximum': {
-            'process_noise': 0.01,
-            'measurement_noise': 5.0,
-            'description': 'Heavy smoothing for very stable output'
-        },
-        'cinematic': {
-            'process_noise': 0.02,
-            'measurement_noise': 3.0,
-            'description': 'Cinematic smoothing with natural motion'
-        }
+    strength_configs = {
+        'minimal': {'process_noise': 0.1, 'measurement_noise': 1.0},
+        'balanced': {'process_noise': 0.05, 'measurement_noise': 0.5},
+        'maximum': {'process_noise': 0.01, 'measurement_noise': 0.1},
+        'cinematic': {'process_noise': 0.005, 'measurement_noise': 0.05}
     }
     
-    config = kalman_configs.get(smoothing_strength, kalman_configs['balanced'])
-    print(f"Using {smoothing_strength} smoothing: {config['description']}")
+    config = strength_configs.get(smoothing_strength, strength_configs['balanced'])
+    dt = 1.0 / fps
     
-    # Apply Kalman filtering to each coordinate dimension
-    smoothed_coords = np.zeros_like(interpolated_df[['crop_x', 'crop_y', 'crop_w', 'crop_h']].values)
-    coord_names = ['crop_x', 'crop_y', 'crop_w', 'crop_h']
+    if enable_debug_outputs and debug_outputs_dir:
+        kalman_config = {
+            "smoothing_strength": smoothing_strength,
+            "process_noise": config['process_noise'],
+            "measurement_noise": config['measurement_noise'],
+            "dt": dt,
+            "fps": fps,
+            "total_frames": len(interpolated_df)
+        }
+        save_kalman_step_data(kalman_config, "03_kalman_filter_config", debug_outputs_dir, f"Kalman filter configuration for {smoothing_strength} smoothing")
     
-    dt = 1.0 / fps  # Time step in seconds
+    coord_columns = ['crop_x', 'crop_y', 'crop_w', 'crop_h']
+    smoothed_coords = np.zeros((len(interpolated_df), len(coord_columns)))
     
-    for i, coord_name in enumerate(coord_names):
-        measurements = interpolated_df[coord_name].values
+    kalman_details = {}
+    
+    for i, col in enumerate(coord_columns):
+        measurements = interpolated_df[col].values
         
-        # Validate measurements
-        if not np.all(np.isfinite(measurements)):
-            print(f"Warning: Non-finite values in {coord_name}, cleaning before filtering...")
-            measurements = pd.Series(measurements).interpolate().fillna(method='ffill').fillna(method='bfill').values
-        
-        # Create and configure Kalman filter
         kf = create_position_velocity_kalman_filter(
             dt=dt,
             process_noise=config['process_noise'],
             measurement_noise=config['measurement_noise']
         )
         
-        # Initialize filter with first measurement
-        kf.x[0] = measurements[0]  # Initial position
-        kf.x[1] = 0.0  # Initial velocity
+        kf.x = np.array([measurements[0], 0.0])
         
-        # Apply filter frame by frame
-        for frame_idx in range(len(measurements)):
-            # Predict step
+        states = []
+        covariances = []
+        
+        for measurement in measurements:
             kf.predict()
+            kf.update(measurement)
             
-            # Update with measurement
-            kf.update(measurements[frame_idx])
+            states.append(kf.x.copy())
+            covariances.append(kf.P.copy())
             
-            # Store smoothed position with bounds checking
-            smoothed_position = float(kf.x[0])  # Extract scalar from array
-            
-            # Ensure the smoothed position is reasonable
-            if not np.isfinite(smoothed_position):
-                # Fall back to measurement if Kalman produces invalid result
-                smoothed_position = measurements[frame_idx]
-                print(f"Warning: Kalman produced non-finite value at frame {frame_idx}, using measurement")
-            
-            smoothed_coords[frame_idx, i] = smoothed_position
+            smoothed_coords[i if i < len(measurements) else len(measurements)-1, i] = kf.x[0]
+        
+        kalman_details[col] = {
+            "initial_measurement": float(measurements[0]),
+            "final_measurement": float(measurements[-1]),
+            "initial_smoothed": float(smoothed_coords[0, i]),
+            "final_smoothed": float(smoothed_coords[-1, i]),
+            "variance_reduction": float(np.var(measurements) - np.var(smoothed_coords[:, i])),
+            "total_frames_processed": len(measurements)
+        }
     
-    # Create result DataFrame
-    smoothed_df = interpolated_df.copy()
-    smoothed_df[['crop_x', 'crop_y', 'crop_w', 'crop_h']] = smoothed_coords
+    if enable_debug_outputs and debug_outputs_dir:
+        save_kalman_step_data(kalman_details, "03_kalman_filter_details", debug_outputs_dir, "Detailed Kalman filter results per coordinate")
     
-    return smoothed_df
+    result_df = interpolated_df.copy()
+    result_df['crop_x'] = smoothed_coords[:, 0]
+    result_df['crop_y'] = smoothed_coords[:, 1]
+    result_df['crop_w'] = smoothed_coords[:, 2]
+    result_df['crop_h'] = smoothed_coords[:, 3]
+    
+    return result_df
 
 
 def create_position_velocity_kalman_filter(
@@ -221,32 +233,18 @@ def create_position_velocity_kalman_filter(
     process_noise: float,
     measurement_noise: float
 ) -> KalmanFilter:
-    """
-    Create a Kalman filter for position-velocity tracking.
+    """Create a Kalman filter for position-velocity tracking."""
     
-    State: [position, velocity]
-    Measurement: position only
-    """
-    
-    # Create filter: 2D state (position, velocity), 1D measurement (position)
     kf = KalmanFilter(dim_x=2, dim_z=1)
     
-    # State transition matrix (constant velocity model)
     kf.F = np.array([
-        [1.0, dt],   # position = position + velocity * dt
-        [0.0, 1.0]   # velocity = velocity (constant)
+        [1.0, dt],
+        [0.0, 1.0]
     ])
     
-    # Measurement function (observe position only)
     kf.H = np.array([[1.0, 0.0]])
-    
-    # Process noise covariance (how much we expect system to change)
     kf.Q = Q_discrete_white_noise(dim=2, dt=dt, var=process_noise)
-    
-    # Measurement noise covariance (how much we trust measurements)
     kf.R = np.array([[measurement_noise]])
-    
-    # Initial state covariance (high uncertainty initially)
     kf.P *= 100.0
     
     return kf
@@ -258,51 +256,37 @@ def validate_and_constrain_coordinates(
     frame_height: int = 1080,
     min_crop_size: int = 100
 ) -> pd.DataFrame:
-    """
-    Validate and constrain smoothed coordinates to ensure valid video crops.
-    """
+    """Validate and constrain smoothed coordinates to ensure valid video crops."""
     
     result_df = smoothed_df.copy()
-    
-    # Handle NaN and infinity values by replacing with previous valid values
     coord_cols = ['crop_x', 'crop_y', 'crop_w', 'crop_h']
     
     for col in coord_cols:
-        # Replace NaN and infinity values
         mask = ~np.isfinite(result_df[col])
         if mask.any():
             print(f"Warning: Found {mask.sum()} non-finite values in {col}, interpolating...")
             result_df[col] = result_df[col].interpolate(method='linear')
-            
-            # If there are still NaN values at the beginning or end, forward/back fill
             result_df[col] = result_df[col].fillna(method='ffill').fillna(method='bfill')
             
-            # If still NaN (shouldn't happen), use default values
             if col in ['crop_x', 'crop_y']:
                 result_df[col] = result_df[col].fillna(0)
-            else:  # crop_w, crop_h
+            else:
                 result_df[col] = result_df[col].fillna(min_crop_size)
     
-    # Ensure integer coordinates after cleaning
     result_df[coord_cols] = result_df[coord_cols].round().astype(int)
     
-    # Constrain coordinates to frame boundaries
     result_df['crop_x'] = np.clip(result_df['crop_x'], 0, frame_width)
     result_df['crop_y'] = np.clip(result_df['crop_y'], 0, frame_height)
     
-    # Ensure minimum crop sizes
     result_df['crop_w'] = np.maximum(result_df['crop_w'], min_crop_size)
     result_df['crop_h'] = np.maximum(result_df['crop_h'], min_crop_size)
     
-    # Ensure crop doesn't exceed frame boundaries
     result_df['crop_w'] = np.minimum(result_df['crop_w'], frame_width - result_df['crop_x'])
     result_df['crop_h'] = np.minimum(result_df['crop_h'], frame_height - result_df['crop_y'])
     
-    # Ensure even dimensions for video encoders
     result_df['crop_w'] = result_df['crop_w'] - (result_df['crop_w'] % 2)
     result_df['crop_h'] = result_df['crop_h'] - (result_df['crop_h'] % 2)
     
-    # Calculate zoom factors for analysis
     result_df['zoom_factor'] = np.minimum(
         frame_width / result_df['crop_w'],
         frame_height / result_df['crop_h']
@@ -312,23 +296,17 @@ def validate_and_constrain_coordinates(
 
 
 def analyze_motion_smoothness(smoothed_df: pd.DataFrame, fps: float) -> Dict:
-    """
-    Analyze the smoothness and quality of the motion after Kalman filtering.
-    """
+    """Analyze the smoothness and quality of the motion after Kalman filtering."""
     
     if len(smoothed_df) < 3:
         return {"error": "Insufficient data for motion analysis"}
     
-    # Calculate velocities (first derivative)
     dt = 1.0 / fps
     coords = smoothed_df[['crop_x', 'crop_y', 'crop_w', 'crop_h']].values
     velocities = np.diff(coords, axis=0) / dt
-    
-    # Calculate accelerations (second derivative)
     accelerations = np.diff(velocities, axis=0) / dt
     
-    # Calculate motion metrics
-    speed = np.sqrt(np.sum(velocities[:, :2]**2, axis=1))  # Only x,y position
+    speed = np.sqrt(np.sum(velocities[:, :2]**2, axis=1))
     acceleration_magnitude = np.sqrt(np.sum(accelerations[:, :2]**2, axis=1))
     
     zoom_factors = smoothed_df['zoom_factor'].values
@@ -356,6 +334,7 @@ def analyze_motion_smoothness(smoothed_df: pd.DataFrame, fps: float) -> Dict:
     
     return metrics
 
+
 def generate_smooth_ffmpeg_filter(smoothed_df: pd.DataFrame) -> str:
     """Build a valid sendcmd text (one option per line)."""
     if smoothed_df.empty:
@@ -368,45 +347,10 @@ def generate_smooth_ffmpeg_filter(smoothed_df: pd.DataFrame) -> str:
         h = int(r["crop_h"]) & ~1
         x = int(r["crop_x"])
         y = int(r["crop_y"])
-        # one option per line ➜ w, h, x, y
         rows.extend([
             f"{t:.3f} crop w {w}",
             f"{t:.3f} crop h {h}",
             f"{t:.3f} crop x {x}",
             f"{t:.3f} crop y {y}",
         ])
-    return "\n".join(rows)
-if __name__ == "__main__":
-    # Test with normalized crop data
-    test_normalized = pd.DataFrame({
-        't_ms': [0, 3000, 6000, 9000, 12000],
-        'crop_x': [146, 146, 143, 143, 121],
-        'crop_y': [267, 267, 277, 277, 335],
-        'crop_w': [737, 737, 792, 792, 586],
-        'crop_h': [414, 414, 445, 445, 330]
-    })
-    
-    print("Testing Kalman smoothing pipeline...")
-    print(f"Input: {len(test_normalized)} keyframes")
-    
-    # Test interpolation and smoothing
-    smoothed = interpolate_and_smooth_coordinates(
-        test_normalized,
-        target_fps=30.0,
-        smoothing_strength='balanced'
-    )
-    
-    print(f"Output: {len(smoothed)} smooth frames")
-    
-    # Analyze motion quality
-    motion_metrics = analyze_motion_smoothness(smoothed, 30.0)
-    print("\nMotion Analysis:")
-    for category, metrics in motion_metrics.items():
-        print(f"  {category}:")
-        for key, value in metrics.items():
-            print(f"    {key}: {value}")
-    
-    # Generate FFmpeg filter (first 10 frames)
-    ffmpeg_filter = generate_smooth_ffmpeg_filter(smoothed.head(10))
-    print(f"\nSample FFmpeg filter (first 10 frames):")
-    print(ffmpeg_filter) 
+    return "\n".join(rows) 

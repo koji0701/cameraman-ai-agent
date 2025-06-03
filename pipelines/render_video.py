@@ -3,41 +3,11 @@ import subprocess
 import pandas as pd
 import json
 import tempfile
-import shutil
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List
 from genai_client import process_video_complete_pipeline, save_complete_results
-from normalize_coordinates import generate_ffmpeg_crop_filter
 import cv2
 HAS_OPENCV = True
-
-# # Try to import cv2 for image processing
-# try:
-#     HAS_OPENCV = True
-# except ImportError:
-#     HAS_OPENCV = False
-#     print("⚠️ OpenCV not found. Frame-by-frame cropping will use FFmpeg only.")
-
-"""
-DYNAMIC CROPPING FIX (2024)
-===========================
-
-The previous sendcmd-based approach was unreliable and produced fake/corrupted MP4 files.
-This has been replaced with a proper frame-by-frame approach following ffmpeg-crop.mdc:
-
-1. Extract all frames as images
-2. Crop each frame individually according to coordinates
-3. Re-encode cropped frames into final video
-
-This provides:
-- Reliable per-frame cropping
-- Better error handling
-- Proper audio preservation
-- Support for OpenCV (faster) or pure FFmpeg (compatible)
-
-Use render_cropped_video_dynamic() with rendering_mode='dynamic' for the new implementation.
-The old generate_sendcmd_filter() function is deprecated but maintained for backward compatibility.
-"""
 
 def get_video_info(input_video_path: str) -> Dict:
     """Get detailed video information using ffprobe."""
@@ -54,17 +24,14 @@ def get_video_info(input_video_path: str) -> Dict:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         info = json.loads(result.stdout)
         
-        # Extract video stream info
         video_stream = next(s for s in info['streams'] if s['codec_type'] == 'video')
-        
-        # Check for audio stream
         audio_stream = next((s for s in info['streams'] if s['codec_type'] == 'audio'), None)
         has_audio = audio_stream is not None
         
         return {
             'width': int(video_stream['width']),
             'height': int(video_stream['height']),
-            'fps': eval(video_stream['r_frame_rate']),  # Convert fraction to float
+            'fps': eval(video_stream['r_frame_rate']),
             'duration': float(video_stream['duration']),
             'bitrate': int(video_stream.get('bit_rate', 0)),
             'codec': video_stream['codec_name'],
@@ -76,38 +43,6 @@ def get_video_info(input_video_path: str) -> Dict:
     except Exception as e:
         print(f"⚠️ Could not get video info: {e}")
         return {}
-
-def generate_smooth_ffmpeg_filter(smoothed_coords_df: pd.DataFrame, fps: float = 29.97) -> str:
-    """
-    Generate FFmpeg filter for frame-by-frame cropping with smooth coordinate transitions.
-    
-    This replaces the old sendcmd approach with a more reliable frame-extraction method.
-    Use render_cropped_video_dynamic() for the actual implementation.
-    """
-    # This function is now deprecated - use render_cropped_video_dynamic instead
-    print("⚠️ generate_sendcmd_filter is deprecated. Use render_cropped_video_dynamic() instead.")
-    return ""
-
-def generate_sendcmd_filter(smoothed_coords_df: pd.DataFrame, fps: float = 29.97) -> str:
-    """
-    Backward compatibility function for old sendcmd approach.
-    
-    This function is deprecated and will return an empty string.
-    Use render_cropped_video_dynamic() for proper dynamic cropping.
-    """
-    print("⚠️ generate_sendcmd_filter is deprecated. Use render_cropped_video_dynamic() instead.")
-    print("⚠️ The sendcmd approach has been replaced with frame-by-frame processing for better reliability.")
-    return ""
-
-def create_dynamic_crop_filter(smoothed_coords_df: pd.DataFrame, fps: float = 29.97) -> str:
-    """
-    Create a complete FFmpeg filter graph for dynamic cropping.
-    
-    This function is now deprecated in favor of the frame-by-frame approach
-    used in render_cropped_video_dynamic().
-    """
-    print("⚠️ create_dynamic_crop_filter is deprecated. Use render_cropped_video_dynamic() instead.")
-    return ""
 
 def render_cropped_video_dynamic(
     input_video_path: str,
@@ -121,9 +56,10 @@ def render_cropped_video_dynamic(
     enable_stabilization: bool = False,
     color_correction: bool = False,
     verbose: bool = True,
+    enable_debug_outputs: bool = False,
+    debug_outputs_dir: str = None,
 ) -> bool:
-    """Render the video with per-frame dynamic cropping using frame extraction and re-encoding."""
-    # Get video info
+    """Render video with per-frame dynamic cropping using frame extraction and re-encoding."""
     video_info = get_video_info(input_video_path)
     fps = video_info.get("fps", 29.97)
     has_audio = video_info.get("has_audio", False)
@@ -136,9 +72,28 @@ def render_cropped_video_dynamic(
     print(f"Frames to process: {len(smoothed_coords_df)}")
     print("Audio:", "present" if has_audio else "none")
     
-    # Determine target resolution for scaling
+    if enable_debug_outputs and debug_outputs_dir:
+        render_config = {
+            "input_video_path": input_video_path,
+            "output_video_path": output_video_path,
+            "video_codec": video_codec,
+            "quality_preset": quality_preset,
+            "bitrate": bitrate,
+            "scale_resolution": scale_resolution,
+            "audio_codec": audio_codec,
+            "enable_stabilization": enable_stabilization,
+            "color_correction": color_correction,
+            "detected_video_info": video_info,
+            "frames_to_process": len(smoothed_coords_df),
+            "rendering_mode": "dynamic_frame_by_frame"
+        }
+        
+        config_path = Path(debug_outputs_dir) / "step_07_render_config.json"
+        with open(config_path, 'w') as f:
+            json.dump(render_config, f, indent=2)
+        print(f"🔍 RENDER DEBUG: Saved render config → {config_path}")
+    
     if scale_resolution == "original":
-        # Use the highest crop resolution from the coordinates
         max_crop_width = int(smoothed_coords_df['crop_w'].max())
         max_crop_height = int(smoothed_coords_df['crop_h'].max())
         target_scale_resolution = f"{max_crop_width}:{max_crop_height}"
@@ -147,15 +102,30 @@ def render_cropped_video_dynamic(
         target_scale_resolution = scale_resolution
         print(f"🎯 Using specified resolution: {target_scale_resolution}")
     
-    # Create temporary directory for frame processing
     with tempfile.TemporaryDirectory(prefix="dynamic_crop_") as temp_dir:
         frames_dir = os.path.join(temp_dir, "frames")
         cropped_dir = os.path.join(temp_dir, "cropped")
         os.makedirs(frames_dir, exist_ok=True)
         os.makedirs(cropped_dir, exist_ok=True)
         
+        if enable_debug_outputs and debug_outputs_dir:
+            frame_processing_info = {
+                "temp_directory": temp_dir,
+                "frames_extraction_dir": frames_dir,
+                "cropped_frames_dir": cropped_dir,
+                "target_scale_resolution": target_scale_resolution,
+                "max_crop_dimensions": {
+                    "width": int(smoothed_coords_df['crop_w'].max()),
+                    "height": int(smoothed_coords_df['crop_h'].max())
+                }
+            }
+            
+            info_path = Path(debug_outputs_dir) / "step_07_frame_processing_info.json"
+            with open(info_path, 'w') as f:
+                json.dump(frame_processing_info, f, indent=2)
+            print(f"🔍 RENDER DEBUG: Saved frame processing info → {info_path}")
+        
         try:
-            # Step 1: Extract frames to images
             if verbose:
                 print("📸 Extracting frames...")
             
@@ -166,324 +136,226 @@ def render_cropped_video_dynamic(
                 frame_pattern
             ]
             
+            if enable_debug_outputs and debug_outputs_dir:
+                extract_cmd_str = " ".join(extract_cmd)
+                cmd_path = Path(debug_outputs_dir) / "step_07_ffmpeg_extract_command.txt"
+                with open(cmd_path, 'w') as f:
+                    f.write(f"# FFmpeg frame extraction command:\n{extract_cmd_str}\n")
+                print(f"🔍 RENDER DEBUG: Saved extraction command → {cmd_path}")
+            
             result = subprocess.run(extract_cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 print(f"❌ Frame extraction failed: {result.stderr}")
+                if enable_debug_outputs and debug_outputs_dir:
+                    error_path = Path(debug_outputs_dir) / "step_07_ffmpeg_extract_error.txt"
+                    with open(error_path, 'w') as f:
+                        f.write(f"STDERR:\n{result.stderr}\n\nSTDOUT:\n{result.stdout}\n")
+                    print(f"🔍 RENDER DEBUG: Saved extraction error → {error_path}")
                 return False
                 
-            # Check how many frames were extracted
             frame_files = sorted([f for f in os.listdir(frames_dir) if f.endswith('.png')])
             if verbose:
                 print(f"✅ Extracted {len(frame_files)} frames")
             
-            # Step 2: Crop each frame according to coordinates
             if verbose:
                 print("✂️ Cropping frames...")
             
             success_count = 0
-            
-            # Create coordinate lookup by frame number
             coords_dict = {}
             for _, row in smoothed_coords_df.iterrows():
-                frame_num = int(row['t_ms'] / 1000.0 * fps) + 1  # Convert time to frame number
+                frame_num = int(row['t_ms'] / 1000.0 * fps) + 1
                 coords_dict[frame_num] = {
                     'x': int(row['crop_x']),
                     'y': int(row['crop_y']),
-                    'w': int(row['crop_w']) & ~1,  # Ensure even
-                    'h': int(row['crop_h']) & ~1   # Ensure even
+                    'w': int(row['crop_w']) & ~1,
+                    'h': int(row['crop_h']) & ~1
                 }
+            
+            if enable_debug_outputs and debug_outputs_dir:
+                coords_mapping_path = Path(debug_outputs_dir) / "step_07_frame_coordinate_mapping.json"
+                coords_mapping_data = {
+                    "total_frames_extracted": len(frame_files),
+                    "coordinate_mappings": coords_dict,
+                    "fps_used_for_mapping": fps,
+                    "mapping_method": "time_to_frame_conversion"
+                }
+                with open(coords_mapping_path, 'w') as f:
+                    json.dump(coords_mapping_data, f, indent=2)
+                print(f"🔍 RENDER DEBUG: Saved coordinate mapping → {coords_mapping_path}")
+            
+            opencv_crop_operations = []
+            ffmpeg_crop_operations = []
             
             for i, frame_file in enumerate(frame_files, 1):
                 frame_path = os.path.join(frames_dir, frame_file)
                 output_frame_path = os.path.join(cropped_dir, frame_file)
                 
-                # Get coordinates for this frame (use closest if exact frame not found)
                 if i in coords_dict:
                     coords = coords_dict[i]
                 else:
-                    # Find closest frame with coordinates
                     closest_frame = min(coords_dict.keys(), key=lambda x: abs(x - i))
                     coords = coords_dict[closest_frame]
                 
                 x, y, w, h = coords['x'], coords['y'], coords['w'], coords['h']
                 
-                # Validate coordinates are within original frame bounds
-                x = max(0, min(x, original_width - w))
-                y = max(0, min(y, original_height - h))
-                w = min(w, original_width - x)
-                h = min(h, original_height - y)
+                crop_operation = {
+                    "frame_number": i,
+                    "frame_file": frame_file,
+                    "crop_coordinates": {"x": x, "y": y, "w": w, "h": h},
+                    "method": "opencv" if HAS_OPENCV else "ffmpeg"
+                }
                 
-                if HAS_OPENCV:
-                    # Use OpenCV for cropping (faster)
-                    try:
+                try:
+                    if HAS_OPENCV:
                         img = cv2.imread(frame_path)
                         if img is not None:
                             cropped = img[y:y+h, x:x+w]
                             cv2.imwrite(output_frame_path, cropped)
                             success_count += 1
+                            crop_operation["status"] = "success"
+                            opencv_crop_operations.append(crop_operation)
                         else:
-                            print(f"⚠️ Could not read frame {frame_file}")
-                    except Exception as e:
-                        print(f"⚠️ Error cropping frame {frame_file}: {e}")
-                else:
-                    # Use FFmpeg for cropping (slower but more compatible)
-                    crop_cmd = [
-                        "ffmpeg", "-y", "-i", frame_path,
-                        "-vf", f"crop={w}:{h}:{x}:{y}",
-                        output_frame_path
-                    ]
-                    
-                    result = subprocess.run(crop_cmd, capture_output=True, text=True)
-                    if result.returncode == 0:
-                        success_count += 1
+                            crop_operation["status"] = "failed_to_read_image"
+                            opencv_crop_operations.append(crop_operation)
                     else:
-                        print(f"⚠️ Error cropping frame {frame_file}: {result.stderr}")
-                
-                # Progress indicator
-                if verbose and i % 100 == 0:
-                    print(f"  Processed {i}/{len(frame_files)} frames...")
+                        crop_cmd = [
+                            "ffmpeg", "-y", "-i", frame_path,
+                            "-vf", f"crop={w}:{h}:{x}:{y}",
+                            output_frame_path
+                        ]
+                        result = subprocess.run(crop_cmd, capture_output=True, text=True)
+                        if result.returncode == 0:
+                            success_count += 1
+                            crop_operation["status"] = "success"
+                        else:
+                            crop_operation["status"] = f"ffmpeg_error: {result.stderr[:100]}"
+                        ffmpeg_crop_operations.append(crop_operation)
+                        
+                except Exception as e:
+                    crop_operation["status"] = f"exception: {str(e)[:100]}"
+                    if HAS_OPENCV:
+                        opencv_crop_operations.append(crop_operation)
+                    else:
+                        ffmpeg_crop_operations.append(crop_operation)
             
-            if verbose:
-                print(f"✅ Successfully cropped {success_count}/{len(frame_files)} frames")
+            if enable_debug_outputs and debug_outputs_dir:
+                all_operations = opencv_crop_operations + ffmpeg_crop_operations
+                operations_log = {
+                    "total_frames_processed": len(frame_files),
+                    "successful_crops": success_count,
+                    "failed_crops": len(frame_files) - success_count,
+                    "opencv_available": HAS_OPENCV,
+                    "operations": all_operations
+                }
+                
+                ops_path = Path(debug_outputs_dir) / "step_07_crop_operations_log.json"
+                with open(ops_path, 'w') as f:
+                    json.dump(operations_log, f, indent=2)
+                print(f"🔍 RENDER DEBUG: Saved crop operations log → {ops_path}")
+                
+                if all_operations:
+                    ops_df = pd.DataFrame(all_operations)
+                    ops_summary_path = Path(debug_outputs_dir) / "step_07_crop_operations_summary.csv"
+                    ops_df.to_csv(ops_summary_path, index=False)
+                    print(f"🔍 RENDER DEBUG: Saved crop operations summary → {ops_summary_path}")
             
             if success_count == 0:
                 print("❌ No frames were successfully cropped")
                 return False
-            
-            # Step 3: Re-encode cropped frames into video
+                
             if verbose:
-                print("🎥 Re-encoding video...")
+                print(f"✅ Successfully cropped {success_count}/{len(frame_files)} frames")
             
-            # Ensure output directory exists
-            os.makedirs(os.path.dirname(output_video_path), exist_ok=True)
+            if verbose:
+                print("🎞️ Re-encoding video...")
             
-            # Get the actual resolution from first cropped frame
-            first_cropped = os.path.join(cropped_dir, frame_files[0])
-            if os.path.exists(first_cropped):
-                # Get dimensions of cropped frame
-                probe_cmd = [
-                    'ffprobe', '-v', 'quiet', '-print_format', 'json',
-                    '-show_streams', first_cropped
-                ]
-                result = subprocess.run(probe_cmd, capture_output=True, text=True)
-                if result.returncode == 0:
-                    info = json.loads(result.stdout)
-                    video_stream = next(s for s in info['streams'] if s['codec_type'] == 'video')
-                    crop_width = int(video_stream['width'])
-                    crop_height = int(video_stream['height'])
-                    if verbose:
-                        print(f"  Cropped frame dimensions: {crop_width}x{crop_height}")
-            
-            # Build re-encoding command
             cropped_pattern = os.path.join(cropped_dir, "frame_%05d.png")
             
-            # Build filter chain
-            filters = []
-            
-            # Scale to target resolution (only if not using original/adaptive resolution)
-            if target_scale_resolution != "original" and ":" in target_scale_resolution:
-                filters.append(f"scale={target_scale_resolution}:flags=lanczos")
-            
-            # Add stabilization if enabled
-            if enable_stabilization:
-                filters.extend([
-                    f"vidstabdetect=stepsize=6:shakiness=8:accuracy=9:result=/tmp/transforms.trf",
-                    f"vidstabtransform=input=/tmp/transforms.trf:zoom=1:smoothing=30"
-                ])
-            
-            # Add color correction if enabled
-            if color_correction:
-                filters.append("eq=contrast=1.1:brightness=0.02:saturation=1.1")
-            
-            # Combine filters
-            filter_str = ",".join(filters) if filters else None
-            
-            # Re-encode command
             encode_cmd = [
                 "ffmpeg", "-y",
                 "-framerate", str(fps),
                 "-i", cropped_pattern,
-                "-c:v", video_codec,
-                "-b:v", bitrate,
-                "-pix_fmt", "yuv420p"
             ]
             
-            if filter_str:
-                encode_cmd.extend(["-vf", filter_str])
+            if has_audio:
+                encode_cmd.extend(["-i", input_video_path])
             
             if video_codec == "h264_videotoolbox":
-                encode_cmd.extend(["-allow_sw", "1", "-realtime", "0", "-profile:v", "high", "-level:v", "4.1"])
-            elif video_codec == "libx264":
-                encode_cmd.extend(["-preset", quality_preset, "-crf", "23"])
+                encode_cmd.extend([
+                    "-c:v", "h264_videotoolbox",
+                    "-b:v", bitrate,
+                    "-allow_sw", "1"
+                ])
+            else:
+                encode_cmd.extend([
+                    "-c:v", video_codec,
+                    "-b:v", bitrate
+                ])
             
-            # Add audio if present
+            if quality_preset in ["fast", "medium", "slow", "veryslow"]:
+                encode_cmd.extend(["-preset", quality_preset])
+            
+            if target_scale_resolution != "original":
+                encode_cmd.extend(["-vf", f"scale={target_scale_resolution}"])
+            
             if has_audio:
-                # Extract audio separately and mux it
-                audio_file = os.path.join(temp_dir, "audio.aac")
-                audio_extract_cmd = [
-                    "ffmpeg", "-y", "-i", input_video_path,
-                    "-vn", "-c:a", audio_codec, "-b:a", "128k",
-                    audio_file
-                ]
-                
-                audio_result = subprocess.run(audio_extract_cmd, capture_output=True, text=True)
-                if audio_result.returncode == 0:
-                    # Create intermediate video without audio first
-                    temp_video = os.path.join(temp_dir, "temp_video.mp4")
-                    encode_cmd.append(temp_video)
-                    
-                    # Run video encoding
-                    result = subprocess.run(encode_cmd, capture_output=not verbose, text=True)
-                    if result.returncode != 0:
-                        print(f"❌ Video encoding failed: {result.stderr}")
-                        return False
-                    
-                    # Mux with audio
-                    mux_cmd = [
-                        "ffmpeg", "-y",
-                        "-i", temp_video,
-                        "-i", audio_file,
-                        "-c", "copy",
-                        output_video_path
-                    ]
-                    
-                    result = subprocess.run(mux_cmd, capture_output=not verbose, text=True)
-                    if result.returncode != 0:
-                        print(f"❌ Audio muxing failed: {result.stderr}")
-                        return False
-                else:
-                    print("⚠️ Could not extract audio, proceeding without audio")
-                    encode_cmd.append(output_video_path)
-                    result = subprocess.run(encode_cmd, capture_output=not verbose, text=True)
-                    if result.returncode != 0:
-                        print(f"❌ Video encoding failed: {result.stderr}")
-                        return False
-            else:
-                # No audio, direct encoding
-                encode_cmd.append(output_video_path)
-                result = subprocess.run(encode_cmd, capture_output=not verbose, text=True)
-                if result.returncode != 0:
-                    print(f"❌ Video encoding failed: {result.stderr}")
-                    return False
+                encode_cmd.extend(["-c:a", audio_codec, "-map", "1:a"])
             
-            # Verify output
-            if os.path.exists(output_video_path):
-                size_mb = os.path.getsize(output_video_path) / (1024 * 1024)
-                if size_mb < 0.1:
-                    print(f"⚠️ Output file is very small ({size_mb:.1f} MB) - may indicate an error")
-                    return False
-                else:
-                    print(f"✅ Dynamic cropped video rendered ({size_mb:.1f} MB)")
-                    
-                    # Clean up stabilization files
-                    if os.path.exists("/tmp/transforms.trf"):
-                        os.remove("/tmp/transforms.trf")
-                    
-                    return True
-            else:
-                print("❌ Output file was not created")
+            encode_cmd.extend(["-vsync", "2", output_video_path])
+            
+            if enable_debug_outputs and debug_outputs_dir:
+                encode_cmd_str = " ".join(encode_cmd)
+                final_cmd_path = Path(debug_outputs_dir) / "step_07_ffmpeg_final_encode_command.txt"
+                with open(final_cmd_path, 'w') as f:
+                    f.write(f"# Final FFmpeg encoding command:\n{encode_cmd_str}\n")
+                print(f"🔍 RENDER DEBUG: Saved final encode command → {final_cmd_path}")
+            
+            result = subprocess.run(encode_cmd, capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                print(f"❌ Video encoding failed: {result.stderr}")
+                if enable_debug_outputs and debug_outputs_dir:
+                    encode_error_path = Path(debug_outputs_dir) / "step_07_ffmpeg_encode_error.txt"
+                    with open(encode_error_path, 'w') as f:
+                        f.write(f"STDERR:\n{result.stderr}\n\nSTDOUT:\n{result.stdout}\n")
+                    print(f"🔍 RENDER DEBUG: Saved encode error → {encode_error_path}")
                 return False
+            
+            if verbose:
+                print(f"✅ Video successfully rendered: {output_video_path}")
                 
+            if enable_debug_outputs and debug_outputs_dir:
+                render_summary = {
+                    "rendering_successful": True,
+                    "output_video_path": output_video_path,
+                    "input_resolution": f"{original_width}x{original_height}",
+                    "output_resolution": target_scale_resolution,
+                    "total_frames_processed": len(frame_files),
+                    "successful_crops": success_count,
+                    "fps": fps,
+                    "has_audio": has_audio,
+                    "video_codec": video_codec,
+                    "audio_codec": audio_codec if has_audio else None,
+                    "bitrate": bitrate,
+                    "quality_preset": quality_preset
+                }
+                
+                summary_path = Path(debug_outputs_dir) / "step_07_final_render_summary.json"
+                with open(summary_path, 'w') as f:
+                    json.dump(render_summary, f, indent=2)
+                print(f"🔍 RENDER DEBUG: Saved final render summary → {summary_path}")
+            
+            return True
+            
         except Exception as e:
-            print(f"❌ Dynamic cropping failed: {e}")
+            print(f"❌ Error during frame processing: {e}")
+            if enable_debug_outputs and debug_outputs_dir:
+                exception_path = Path(debug_outputs_dir) / "step_07_processing_exception.txt"
+                with open(exception_path, 'w') as f:
+                    import traceback
+                    f.write(f"Exception during frame processing:\n{traceback.format_exc()}\n")
+                print(f"🔍 RENDER DEBUG: Saved exception details → {exception_path}")
             return False
-
-def render_multipass_video(
-    input_video_path: str,
-    output_video_path: str,
-    smoothed_coords_df: pd.DataFrame,
-    target_quality: str = 'high',  # 'medium', 'high', 'ultra'
-    verbose: bool = True
-) -> bool:
-    """
-    Render video using multi-pass encoding for optimal quality/size ratio.
-    
-    Args:
-        input_video_path: Source video
-        output_video_path: Final output
-        smoothed_coords_df: Smooth coordinates
-        target_quality: Quality level
-        verbose: Show progress
-        
-    Returns:
-        Success status
-    """
-    
-    print(f"🎯 Multi-pass encoding for {target_quality} quality")
-    
-    # Quality settings
-    quality_settings = {
-        'medium': {'crf': 23, 'preset': 'medium', 'bitrate': '10M'},
-        'high': {'crf': 20, 'preset': 'slow', 'bitrate': '15M'},
-        'ultra': {'crf': 18, 'preset': 'veryslow', 'bitrate': '20M'}
-    }
-    
-    settings = quality_settings.get(target_quality, quality_settings['high'])
-    
-    # Temporary files
-    temp_cropped = output_video_path.replace('.mp4', '_temp_cropped.mp4')
-    pass1_log = output_video_path.replace('.mp4', '_pass1.log')
-    
-    try:
-        # Pass 1: Create cropped video (fast preset)
-        print("📹 Pass 1: Creating cropped video...")
-        success = render_cropped_video_simple(
-            input_video_path,
-            temp_cropped,
-            smoothed_coords_df,
-            video_codec='libx264',
-            bitrate=settings['bitrate'],
-            verbose=verbose
-        )
-        
-        if not success:
-            return False
-        
-        # Pass 2: Optimal encoding
-        print("🎨 Pass 2: Optimizing encoding...")
-        
-        cmd = [
-            'ffmpeg',
-            '-y',
-            '-i', temp_cropped,
-            '-c:v', 'libx264',
-            '-preset', settings['preset'],
-            '-crf', str(settings['crf']),
-            '-tune', 'film',
-            '-movflags', '+faststart',
-            '-c:a', 'aac',
-            '-b:a', '128k',
-            output_video_path
-        ]
-        
-        process = subprocess.run(
-            cmd,
-            capture_output=not verbose,
-            text=True,
-            check=True
-        )
-        
-        print(f"✅ Multi-pass encoding complete!")
-        
-        # Clean up
-        if os.path.exists(temp_cropped):
-            os.remove(temp_cropped)
-        
-        if os.path.exists(output_video_path):
-            file_size = os.path.getsize(output_video_path) / (1024 * 1024)
-            print(f"Final output: {output_video_path}")
-            print(f"File size: {file_size:.1f} MB")
-        
-        return True
-        
-    except Exception as e:
-        print(f"❌ Multi-pass encoding error: {e}")
-        # Clean up on error
-        for temp_file in [temp_cropped, pass1_log]:
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
-        return False
-
 
 def render_cropped_video_simple(
     input_video_path: str,
@@ -495,42 +367,31 @@ def render_cropped_video_simple(
     audio_codec: str = 'aac',
     verbose: bool = True
 ) -> bool:
-    """
-    Render a statically‑cropped video (average crop) in one pass.
-    """
-
-    # --- gather basic info --------------------------------------------------
+    """Render video with static crop using average coordinates."""
     video_info = get_video_info(input_video_path)
     has_audio = video_info.get('has_audio', False)
     original_width = video_info.get("width", 1920)
     original_height = video_info.get("height", 1080)
 
-    # average crop rectangle (ensure even dims)
     avg_x = int(smoothed_coords_df['crop_x'].mean())
     avg_y = int(smoothed_coords_df['crop_y'].mean())
-    avg_w = int(smoothed_coords_df['crop_w'].mean()) & ~1  # even width
-    avg_h = int(smoothed_coords_df['crop_h'].mean()) & ~1  # even height
+    avg_w = int(smoothed_coords_df['crop_w'].mean()) & ~1
+    avg_h = int(smoothed_coords_df['crop_h'].mean()) & ~1
 
     print(f"Using average crop: {avg_w}x{avg_h} at ({avg_x},{avg_y})")
     print(f"Original video: {original_width}x{original_height}")
     print("Audio stream:" + (" present" if has_audio else " none"))
 
-    # Determine target resolution for scaling
     if scale_resolution == "original":
-        # Use the average crop dimensions
         target_scale_resolution = f"{avg_w}:{avg_h}"
         print(f"🎯 Using adaptive resolution: {target_scale_resolution} (based on crop)")
     else:
         target_scale_resolution = scale_resolution
         print(f"🎯 Using specified resolution: {target_scale_resolution}")
 
-    # -----------------------------------------------------------------------
     os.makedirs(os.path.dirname(output_video_path), exist_ok=True)
 
-    # build safe filter graph:
-    #   1) crop  ➜  2) scale  ➜  label [outv]
     if target_scale_resolution == "original" or ":" not in target_scale_resolution:
-        # No scaling needed
         filter_graph = f"[0:v]crop={avg_w}:{avg_h}:{avg_x}:{avg_y}[outv]"
     else:
         filter_graph = (
@@ -573,271 +434,48 @@ def render_cropped_video_simple(
         print("❌ FFmpeg binary not found. Install FFmpeg first.")
         return False
 
-
-
 def render_cropped_video(
     input_video_path: str,
     output_video_path: str,
-    crop_filter_file: str = None,
-    smoothed_coords_df: pd.DataFrame = None,
-    video_codec: str = 'h264_videotoolbox',  # Apple Silicon hardware encoding
-    rendering_mode: str = 'simple',  # 'simple', 'dynamic', 'multipass'
+    smoothed_coords_df: pd.DataFrame,
+    video_codec: str = 'h264_videotoolbox',
+    rendering_mode: str = 'simple',
     quality_preset: str = 'medium',
     bitrate: str = '15M',
-    scale_resolution: str = 'original',  # Changed default to 'original'
+    scale_resolution: str = 'original',
     audio_codec: str = 'aac',
     enable_stabilization: bool = False,
     color_correction: bool = False,
     verbose: bool = True
 ) -> bool:
-    """
-    Render cropped video using FFmpeg with multiple rendering modes.
+    """Render cropped video using FFmpeg with multiple rendering modes."""
+    print(f"🎬 Rendering Mode: {rendering_mode.upper()}")
     
-    Args:
-        input_video_path: Source video file
-        output_video_path: Output video file
-        crop_filter_file: Legacy crop filter file (deprecated)
-        smoothed_coords_df: DataFrame with smooth crop coordinates
-        video_codec: Video codec to use
-        rendering_mode: 'simple' (static crop), 'dynamic' (frame-by-frame), 'multipass' (quality optimized)
-        quality_preset: Encoding quality preset
-        bitrate: Target bitrate
-        scale_resolution: Final resolution
-        audio_codec: Audio codec
-        enable_stabilization: Apply video stabilization
-        color_correction: Apply color correction
-        verbose: Print detailed output
-        
-    Returns:
-        Success status
-    """
-    
-    if smoothed_coords_df is not None:
-        print(f"🎬 Rendering Mode: {rendering_mode.upper()}")
-        
-        if rendering_mode == 'dynamic':
-            return render_cropped_video_dynamic(
-                input_video_path,
-                output_video_path,
-                smoothed_coords_df,
-                video_codec=video_codec,
-                quality_preset=quality_preset,
-                bitrate=bitrate,
-                scale_resolution=scale_resolution,
-                audio_codec=audio_codec,
-                enable_stabilization=enable_stabilization,
-                color_correction=color_correction,
-                verbose=verbose
-            )
-        
-        elif rendering_mode == 'multipass':
-            return render_multipass_video(
-                input_video_path,
-                output_video_path,
-                smoothed_coords_df,
-                target_quality=quality_preset,
-                verbose=verbose
-            )
-        
-        else:  # 'simple' mode
-            return render_cropped_video_simple(
-                input_video_path,
-                output_video_path,
-                smoothed_coords_df,
-                video_codec,
-                bitrate,
-                scale_resolution,
-                audio_codec,
-                verbose
-            )
-    
-    # Legacy: use crop filter file if provided
-    if crop_filter_file is None:
-        raise ValueError("Must provide either crop_filter_file or smoothed_coords_df")
-    
-    print(f"⚠️ Using legacy crop filter file (deprecated)")
-    print(f"💡 Recommend using smoothed coordinates with rendering_mode instead")
-    
-    # For now, extract first crop coordinates from file
-    with open(crop_filter_file, 'r') as f:
-        first_line = f.readline().strip()
-    
-    # Parse first crop command to get static dimensions
-    # Format: "0.000 [enter] crop w 782 h 440 x 328 y 260;"
-    import re
-    match = re.search(r'w (\d+) h (\d+) x (\d+) y (\d+)', first_line)
-    if match:
-        w, h, x, y = map(int, match.groups())
-        mock_df = pd.DataFrame({'crop_x': [x], 'crop_y': [y], 'crop_w': [w], 'crop_h': [h]})
+    if rendering_mode == 'dynamic':
+        return render_cropped_video_dynamic(
+            input_video_path,
+            output_video_path,
+            smoothed_coords_df,
+            video_codec=video_codec,
+            quality_preset=quality_preset,
+            bitrate=bitrate,
+            scale_resolution=scale_resolution,
+            audio_codec=audio_codec,
+            enable_stabilization=enable_stabilization,
+            color_correction=color_correction,
+            verbose=verbose
+        )
+    else:
         return render_cropped_video_simple(
             input_video_path,
             output_video_path,
-            mock_df,
+            smoothed_coords_df,
             video_codec,
             bitrate,
             scale_resolution,
             audio_codec,
             verbose
         )
-    
-    raise ValueError("Could not parse crop coordinates from filter file")
-
-
-def create_preview_video(
-    input_video_path: str,
-    output_video_path: str,
-    smoothed_coords_df: pd.DataFrame,
-    preview_duration: int = 10,  # seconds
-    preview_start: int = 5,      # start offset
-    verbose: bool = True
-) -> bool:
-    """
-    Create a quick preview video showing the crop area for testing.
-    
-    Args:
-        input_video_path: Source video
-        output_video_path: Preview output
-        smoothed_coords_df: Crop coordinates
-        preview_duration: Length of preview in seconds
-        preview_start: Start time in seconds
-        verbose: Show progress
-        
-    Returns:
-        Success status
-    """
-    
-    print(f"🎬 Creating {preview_duration}s preview starting at {preview_start}s...")
-    
-    # Calculate average crop for preview
-    avg_x = int(smoothed_coords_df['crop_x'].mean())
-    avg_y = int(smoothed_coords_df['crop_y'].mean())
-    avg_w = int(smoothed_coords_df['crop_w'].mean())
-    avg_h = int(smoothed_coords_df['crop_h'].mean())
-    
-    # Ensure even dimensions
-    avg_w = avg_w - (avg_w % 2)
-    avg_h = avg_h - (avg_h % 2)
-    
-    # Ensure output directory exists
-    os.makedirs(os.path.dirname(output_video_path), exist_ok=True)
-    
-    cmd = [
-        'ffmpeg',
-        '-y',
-        '-ss', str(preview_start),
-        '-i', input_video_path,
-        '-t', str(preview_duration),
-        '-filter_complex', 
-        f'[0:v]split=2[original][crop];'
-        f'[crop]crop={avg_w}:{avg_h}:{avg_x}:{avg_y},scale=960:540[cropped];'
-        f'[original]scale=960:540[scaled_orig];'
-        f'[scaled_orig][cropped]hstack[final]',
-        '-map', '[final]',
-        '-map', '0:a',
-        '-c:v', 'libx264',
-        '-preset', 'fast',
-        '-crf', '28',
-        '-c:a', 'aac',
-        output_video_path
-    ]
-    
-    if verbose:
-        print(f"Preview crop: {avg_w}x{avg_h} at ({avg_x},{avg_y})")
-        print(f"Command: {' '.join(cmd)}")
-    
-    try:
-        subprocess.run(cmd, capture_output=not verbose, text=True, check=True)
-        
-        if os.path.exists(output_video_path):
-            file_size = os.path.getsize(output_video_path) / (1024 * 1024)
-            print(f"✅ Preview created: {output_video_path}")
-            print(f"File size: {file_size:.1f} MB")
-        
-        return True
-        
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Preview creation failed: {e}")
-        return False
-
-
-def batch_render_videos(
-    input_videos: List[str],
-    output_directory: str,
-    rendering_mode: str = 'simple',
-    quality_preset: str = 'medium',
-    create_previews: bool = True,
-    verbose: bool = True
-) -> List[bool]:
-    """
-    Batch process multiple videos with the same settings.
-    
-    Args:
-        input_videos: List of input video paths
-        output_directory: Directory for outputs
-        rendering_mode: Rendering mode for all videos
-        quality_preset: Quality preset for all videos
-        create_previews: Create preview videos
-        verbose: Show progress
-        
-    Returns:
-        List of success statuses for each video
-    """
-    
-    print(f"🎬 Batch processing {len(input_videos)} videos")
-    print(f"Mode: {rendering_mode}, Quality: {quality_preset}")
-    print("=" * 60)
-    
-    os.makedirs(output_directory, exist_ok=True)
-    results = []
-    
-    for i, input_video in enumerate(input_videos, 1):
-        print(f"\n📹 Processing {i}/{len(input_videos)}: {os.path.basename(input_video)}")
-        
-        try:
-            # Generate output filename
-            base_name = os.path.splitext(os.path.basename(input_video))[0]
-            output_video = os.path.join(output_directory, f"{base_name}_cropped.mp4")
-            
-            # Run complete pipeline
-            success = process_and_render_complete(
-                input_video,
-                output_video,
-                padding_factor=1.1,
-                smoothing_strength='balanced',
-                interpolation_method='cubic',
-                rendering_mode=rendering_mode,
-                quality_preset=quality_preset,
-                enable_stabilization=False,
-                color_correction=False,
-                save_intermediate_files=verbose
-            )
-            
-            results.append(success)
-            
-            # Create preview if requested and successful
-            if success and create_previews:
-                preview_path = os.path.join(output_directory, f"{base_name}_preview.mp4")
-                print(f"🎬 Creating preview for {base_name}...")
-                
-                # Need to load the smoothed coordinates for preview
-                # This is a simplified approach - in practice, you'd save/load the coordinates
-                print("⚠️ Preview creation requires saved coordinate data")
-            
-            if success:
-                print(f"✅ {base_name} completed successfully")
-            else:
-                print(f"❌ {base_name} failed")
-                
-        except Exception as e:
-            print(f"❌ Error processing {input_video}: {e}")
-            results.append(False)
-    
-    print("\n" + "=" * 60)
-    successful = sum(results)
-    print(f"🎉 Batch complete: {successful}/{len(input_videos)} videos processed successfully")
-    
-    return results
-
 
 def process_and_render_complete(
     input_video_path: str,
@@ -845,33 +483,16 @@ def process_and_render_complete(
     padding_factor: float = 1.1,
     smoothing_strength: str = 'balanced',
     interpolation_method: str = 'cubic',
-    rendering_mode: str = 'simple',  # 'simple', 'dynamic', 'multipass'
+    rendering_mode: str = 'simple',
     quality_preset: str = 'medium',
     enable_stabilization: bool = False,
     color_correction: bool = False,
     save_intermediate_files: bool = True,
+    enable_debug_outputs: bool = True,
+    debug_outputs_dir: str = None,
     **render_kwargs
 ) -> bool:
-    """
-    Complete end-to-end pipeline: Analyze → Normalize → Smooth → Render
-    
-    Args:
-        input_video_path: Source video file
-        output_video_path: Final cropped video file
-        padding_factor: Padding around bounding boxes (1.1 = 10%)
-        smoothing_strength: Kalman filter strength ('minimal', 'balanced', 'maximum', 'cinematic')
-        interpolation_method: Interpolation method ('cubic', 'linear', 'quadratic')
-        rendering_mode: Rendering mode ('simple', 'dynamic', 'multipass')
-        quality_preset: Quality preset ('fast', 'medium', 'slow', 'best')
-        enable_stabilization: Apply video stabilization
-        color_correction: Apply color correction
-        save_intermediate_files: Save analysis files for debugging
-        **render_kwargs: Additional arguments for render_cropped_video
-        
-    Returns:
-        Success status
-    """
-    
+    """Complete end-to-end pipeline: Analyze → Normalize → Smooth → Render"""
     print(f"🚀 STARTING COMPLETE AI CAMERAMAN PIPELINE")
     print(f"Input: {input_video_path}")
     print(f"Output: {output_video_path}")
@@ -880,19 +501,21 @@ def process_and_render_complete(
         print("📹 Video stabilization: ENABLED")
     if color_correction:
         print("🎨 Color correction: ENABLED")
+    if enable_debug_outputs:
+        print("🔍 Debug outputs: ENABLED")
     print("=" * 60)
     
     try:
-        # Step 1: Complete analysis and smoothing pipeline
         (original_boxes, normalized_crops, smoothed_coords, 
          quality_metrics, motion_metrics, ffmpeg_filter) = process_video_complete_pipeline(
             input_video_path,
             padding_factor=padding_factor,
             smoothing_strength=smoothing_strength,
-            interpolation_method=interpolation_method
+            interpolation_method=interpolation_method,
+            enable_debug_outputs=enable_debug_outputs,
+            debug_outputs_dir=debug_outputs_dir
         )
         
-        # Step 2: Save intermediate results if requested
         if save_intermediate_files:
             base_filename = output_video_path.replace('.mp4', '_analysis')
             save_complete_results(
@@ -905,24 +528,59 @@ def process_and_render_complete(
                 base_filename
             )
         
-        # Step 3: Render final video with advanced options
         print("=" * 60)
-        success = render_cropped_video(
-            input_video_path,
-            output_video_path,
-            smoothed_coords_df=smoothed_coords,
-            rendering_mode=rendering_mode,
-            quality_preset=quality_preset,
-            enable_stabilization=enable_stabilization,
-            color_correction=color_correction,
-            **render_kwargs
-        )
+        
+        if enable_debug_outputs and debug_outputs_dir is None:
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            project_root = Path(__file__).parent.parent
+            outputs_base = project_root / "outputs"
+            debug_outputs_dir = str(outputs_base / f"debug_{timestamp}_pipeline")
+        
+        if rendering_mode == 'dynamic':
+            success = render_cropped_video_dynamic(
+                input_video_path,
+                output_video_path,
+                smoothed_coords,
+                quality_preset=quality_preset,
+                enable_stabilization=enable_stabilization,
+                color_correction=color_correction,
+                enable_debug_outputs=enable_debug_outputs,
+                debug_outputs_dir=debug_outputs_dir,
+                **render_kwargs
+            )
+        else:
+            success = render_cropped_video(
+                input_video_path,
+                output_video_path,
+                smoothed_coords_df=smoothed_coords,
+                rendering_mode=rendering_mode,
+                quality_preset=quality_preset,
+                enable_stabilization=enable_stabilization,
+                color_correction=color_correction,
+                **render_kwargs
+            )
+            
+            if enable_debug_outputs and debug_outputs_dir:
+                render_info = {
+                    "rendering_mode": rendering_mode,
+                    "function_used": "render_cropped_video",
+                    "input_video_path": input_video_path,
+                    "output_video_path": output_video_path,
+                    "quality_preset": quality_preset,
+                    "enable_stabilization": enable_stabilization,
+                    "color_correction": color_correction,
+                    "additional_kwargs": render_kwargs
+                }
+                render_info_path = Path(debug_outputs_dir) / "step_07_render_mode_info.json"
+                with open(render_info_path, 'w') as f:
+                    json.dump(render_info, f, indent=2)
+                print(f"🔍 RENDER DEBUG: Saved render mode info → {render_info_path}")
         
         if success:
             print(f"\n🎉 PIPELINE COMPLETE!")
             print(f"✅ Final video: {output_video_path}")
             
-            # Print summary stats
             print(f"\n📊 SUMMARY:")
             print(f"  Original keyframes: {len(original_boxes)}")
             print(f"  Smooth frames: {len(smoothed_coords)}")
@@ -931,635 +589,22 @@ def process_and_render_complete(
             print(f"  Motion smoothness: {motion_metrics['motion_analysis']['speed_consistency']:.2f}")
             print(f"  Rendering mode: {rendering_mode}")
             
+            if enable_debug_outputs:
+                print(f"\n🔍 DEBUG DATA:")
+                print(f"  All intermediate files saved to: {debug_outputs_dir}")
+                print(f"  Step-by-step outputs available for analysis")
+            
         return success
         
     except Exception as e:
         print(f"❌ Pipeline error: {e}")
         import traceback
         traceback.print_exc()
-        return False
-
-
-def render_with_watermark(
-    input_video_path: str,
-    output_video_path: str,
-    smoothed_coords_df: pd.DataFrame,
-    watermark_text: str = None,
-    watermark_image: str = None,
-    watermark_position: str = 'bottom-right',  # 'top-left', 'top-right', 'bottom-left', 'bottom-right', 'center'
-    watermark_opacity: float = 0.7,
-    render_kwargs: dict = None
-) -> bool:
-    """
-    Render video with watermark or logo overlay.
-    
-    Args:
-        input_video_path: Source video
-        output_video_path: Output with watermark
-        smoothed_coords_df: Crop coordinates
-        watermark_text: Text watermark
-        watermark_image: Image watermark path
-        watermark_position: Position on screen
-        watermark_opacity: Opacity (0.0-1.0)
-        render_kwargs: Additional render arguments
         
-    Returns:
-        Success status
-    """
-    
-    if watermark_text is None and watermark_image is None:
-        print("⚠️ No watermark specified, rendering without watermark")
-        return render_cropped_video(
-            input_video_path,
-            output_video_path,
-            smoothed_coords_df=smoothed_coords_df,
-            **(render_kwargs or {})
-        )
-    
-    print(f"🎨 Adding watermark to video...")
-    
-    # First render the cropped video
-    temp_cropped = output_video_path.replace('.mp4', '_temp_cropped.mp4')
-    
-    success = render_cropped_video(
-        input_video_path,
-        temp_cropped,
-        smoothed_coords_df=smoothed_coords_df,
-        **(render_kwargs or {})
-    )
-    
-    if not success:
-        return False
-    
-    try:
-        # Position mapping
-        positions = {
-            'top-left': '10:10',
-            'top-right': 'W-w-10:10',
-            'bottom-left': '10:H-h-10',
-            'bottom-right': 'W-w-10:H-h-10',
-            'center': '(W-w)/2:(H-h)/2'
-        }
+        if enable_debug_outputs and debug_outputs_dir:
+            exception_path = Path(debug_outputs_dir) / "pipeline_exception.txt"
+            with open(exception_path, 'w') as f:
+                f.write(f"Pipeline Exception:\n{traceback.format_exc()}\n")
+            print(f"🔍 DEBUG: Exception details saved to {exception_path}")
         
-        pos = positions.get(watermark_position, positions['bottom-right'])
-        
-        # Build watermark filter
-        if watermark_text:
-            # Text watermark
-            watermark_filter = (
-                f"drawtext=text='{watermark_text}':fontcolor=white@{watermark_opacity}:"
-                f"fontsize=24:x={pos}:y=H-th-10"
-            )
-        else:
-            # Image watermark
-            watermark_filter = f"[1:v]format=rgba,colorchannelmixer=aa={watermark_opacity}[watermark];[0:v][watermark]overlay={pos}"
-        
-        # Build FFmpeg command
-        cmd = [
-            'ffmpeg',
-            '-y',
-            '-i', temp_cropped
-        ]
-        
-        if watermark_image:
-            cmd.extend(['-i', watermark_image])
-        
-        if watermark_text:
-            cmd.extend([
-                '-vf', watermark_filter,
-                '-c:v', 'libx264',
-                '-preset', 'medium',
-                '-crf', '23',
-                '-c:a', 'aac'
-            ])
-        else:
-            cmd.extend([
-                '-filter_complex', watermark_filter,
-                '-c:v', 'libx264',
-                '-preset', 'medium',
-                '-crf', '23',
-                '-c:a', 'aac'
-            ])
-        
-        cmd.append(output_video_path)
-        
-        print(f"Adding {'text' if watermark_text else 'image'} watermark at {watermark_position}")
-        
-        subprocess.run(cmd, capture_output=True, text=True, check=True)
-        
-        # Clean up
-        if os.path.exists(temp_cropped):
-            os.remove(temp_cropped)
-        
-        print(f"✅ Watermarked video created: {output_video_path}")
-        return True
-        
-    except Exception as e:
-        print(f"❌ Watermark error: {e}")
-        # Clean up on error
-        if os.path.exists(temp_cropped):
-            os.remove(temp_cropped)
-        return False
-
-
-def analyze_video_quality(video_path: str) -> Dict:
-    """
-    Analyze video quality metrics using ffprobe and custom analysis.
-    
-    Args:
-        video_path: Path to video file
-        
-    Returns:
-        Quality metrics dictionary
-    """
-    
-    print(f"📊 Analyzing video quality...")
-    
-    try:
-        # Get basic video info
-        video_info = get_video_info(video_path)
-        
-        # Calculate quality score based on resolution, bitrate, codec
-        quality_score = 0
-        
-        # Resolution score (max 40 points)
-        width = video_info.get('width', 0)
-        height = video_info.get('height', 0)
-        if width >= 1920 and height >= 1080:
-            quality_score += 40
-        elif width >= 1280 and height >= 720:
-            quality_score += 30
-        elif width >= 854 and height >= 480:
-            quality_score += 20
-        else:
-            quality_score += 10
-        
-        # Bitrate score (max 30 points)
-        bitrate = video_info.get('bitrate', 0)
-        if bitrate >= 15000000:  # 15 Mbps
-            quality_score += 30
-        elif bitrate >= 10000000:  # 10 Mbps
-            quality_score += 25
-        elif bitrate >= 5000000:   # 5 Mbps
-            quality_score += 20
-        else:
-            quality_score += 10
-        
-        # Codec score (max 20 points)
-        codec = video_info.get('codec', '')
-        if codec in ['h264', 'hevc', 'av1']:
-            quality_score += 20
-        elif codec in ['vp9', 'vp8']:
-            quality_score += 15
-        else:
-            quality_score += 10
-        
-        # Frame rate score (max 10 points)
-        fps = video_info.get('fps', 0)
-        if fps >= 60:
-            quality_score += 10
-        elif fps >= 30:
-            quality_score += 8
-        elif fps >= 24:
-            quality_score += 6
-        else:
-            quality_score += 4
-        
-        quality_grade = 'A' if quality_score >= 85 else 'B' if quality_score >= 70 else 'C' if quality_score >= 50 else 'D'
-        
-        metrics = {
-            'resolution': f"{width}x{height}",
-            'bitrate_mbps': bitrate / 1000000 if bitrate else 0,
-            'fps': fps,
-            'codec': codec,
-            'duration_seconds': video_info.get('duration', 0),
-            'quality_score': quality_score,
-            'quality_grade': quality_grade,
-            'file_size_mb': os.path.getsize(video_path) / (1024 * 1024)
-        }
-        
-        print(f"Quality Grade: {quality_grade} ({quality_score}/100)")
-        print(f"Resolution: {width}x{height} @ {fps:.1f}fps")
-        print(f"Bitrate: {metrics['bitrate_mbps']:.1f} Mbps")
-        print(f"Codec: {codec}")
-        print(f"Duration: {metrics['duration_seconds']:.1f}s")
-        print(f"File size: {metrics['file_size_mb']:.1f} MB")
-        
-        return metrics
-        
-    except Exception as e:
-        print(f"❌ Quality analysis error: {e}")
-        return {}
-
-
-def quick_render_example():
-    """Quick example using existing analysis results"""
-    
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(script_dir, ".."))
-    
-    input_video = os.path.join(project_root, "videos", "waterpolo_trimmed.webm")
-    output_video = os.path.join(project_root, "outputs", "waterpolo_cropped.mp4")
-    crop_filter = os.path.join(project_root, "outputs", "waterpolo_analysis_05_crop_filter.txt")
-    
-    if os.path.exists(crop_filter):
-        print("🔄 Using existing crop filter for quick render...")
-        success = render_cropped_video(
-            input_video,
-            output_video,
-            crop_filter_file=crop_filter,
-            verbose=True
-        )
-        return success
-    else:
-        print("No existing crop filter found. Run complete pipeline first.")
-        return False
-
-
-def demo_advanced_features():
-    """Demonstrate advanced FFmpeg features"""
-    
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(script_dir, ".."))
-    
-    input_video = os.path.join(project_root, "videos", "waterpolo_trimmed.webv")
-    
-    print("🎬 ADVANCED FFMPEG FEATURES DEMO")
-    print("=" * 50)
-    
-    # Demo 1: Dynamic cropping with stabilization
-    print("\n1. Dynamic Cropping with Stabilization")
-    output_dynamic = os.path.join(project_root, "outputs", "demo_dynamic_stabilized.mp4")
-    success1 = process_and_render_complete(
-        input_video,
-        output_dynamic,
-        rendering_mode='dynamic',
-        quality_preset='medium',
-        enable_stabilization=True,
-        color_correction=True,
-        save_intermediate_files=False
-    )
-    
-    # Demo 2: Multi-pass encoding for high quality
-    print("\n2. Multi-pass High Quality Encoding")
-    output_multipass = os.path.join(project_root, "outputs", "demo_multipass_high.mp4")
-    success2 = process_and_render_complete(
-        input_video,
-        output_multipass,
-        rendering_mode='multipass',
-        quality_preset='high',
-        save_intermediate_files=False
-    )
-    
-    # Demo 3: Preview creation
-    print("\n3. Quick Preview Creation")
-    if success1:
-        preview_path = os.path.join(project_root, "outputs", "demo_preview.mp4")
-        # Load coordinates from saved analysis
-        try:
-            coords_file = output_dynamic.replace('.mp4', '_analysis_04_smoothed_coordinates.csv')
-            if os.path.exists(coords_file):
-                import pandas as pd
-                smoothed_coords = pd.read_csv(coords_file)
-                create_preview_video(
-                    input_video,
-                    preview_path,
-                    smoothed_coords,
-                    preview_duration=15,
-                    preview_start=10
-                )
-        except Exception as e:
-            print(f"⚠️ Preview creation skipped: {e}")
-    
-    # Demo 4: Quality analysis
-    print("\n4. Video Quality Analysis")
-    if success1:
-        print("\nOriginal video:")
-        analyze_video_quality(input_video)
-        print("\nProcessed video:")
-        analyze_video_quality(output_dynamic)
-    
-    print("\n" + "=" * 50)
-    print(f"Demo Results:")
-    print(f"  Dynamic render: {'✅' if success1 else '❌'}")
-    print(f"  Multi-pass render: {'✅' if success2 else '❌'}")
-    
-
-def parse_arguments():
-    """Parse command line arguments for flexible usage"""
-    import argparse
-    
-    parser = argparse.ArgumentParser(description='AI Cameraman Video Processing')
-    parser.add_argument('input_video', help='Input video file path')
-    parser.add_argument('output_video', help='Output video file path')
-    
-    # Analysis options
-    parser.add_argument('--padding', type=float, default=1.1, 
-                       help='Padding factor around bounding boxes (default: 1.1)')
-    parser.add_argument('--smoothing', choices=['minimal', 'balanced', 'maximum', 'cinematic'], 
-                       default='balanced', help='Kalman filter smoothing strength')
-    parser.add_argument('--interpolation', choices=['cubic', 'linear', 'quadratic'], 
-                       default='cubic', help='Interpolation method')
-    
-    # Rendering options
-    parser.add_argument('--mode', choices=['simple', 'dynamic', 'multipass'], 
-                       default='simple', help='Rendering mode')
-    parser.add_argument('--quality', choices=['fast', 'medium', 'slow', 'best', 'ultra'], 
-                       default='medium', help='Quality preset')
-    parser.add_argument('--codec', choices=['h264_videotoolbox', 'libx264', 'hevc_videotoolbox'], 
-                       default='h264_videotoolbox', help='Video codec')
-    parser.add_argument('--bitrate', default='15M', help='Target bitrate (e.g., 15M)')
-    parser.add_argument('--resolution', default='original', help='Target resolution (e.g., 1920:1080, or "original" for adaptive)')
-    
-    # Advanced features
-    parser.add_argument('--stabilize', action='store_true', help='Enable video stabilization')
-    parser.add_argument('--color-correct', action='store_true', help='Enable color correction')
-    parser.add_argument('--watermark-text', help='Add text watermark')
-    parser.add_argument('--watermark-image', help='Add image watermark')
-    parser.add_argument('--watermark-position', 
-                       choices=['top-left', 'top-right', 'bottom-left', 'bottom-right', 'center'],
-                       default='bottom-right', help='Watermark position')
-    
-    # Output options
-    parser.add_argument('--preview', action='store_true', help='Create preview video')
-    parser.add_argument('--save-analysis', action='store_true', help='Save intermediate analysis files')
-    parser.add_argument('--analyze-quality', action='store_true', help='Analyze output video quality')
-    parser.add_argument('--verbose', action='store_true', help='Verbose output')
-    
-    return parser.parse_args()
-
-
-def test_dynamic_cropping(smoothed_coords_df: pd.DataFrame, output_path: str = None) -> bool:
-    """
-    Test the new frame-by-frame dynamic cropping implementation.
-    
-    Args:
-        smoothed_coords_df: DataFrame with crop coordinates over time
-        output_path: Optional path to save test output
-    
-    Returns:
-        True if the implementation works correctly, False otherwise
-    """
-    try:
-        print("🧪 Testing frame-by-frame dynamic cropping...")
-        
-        if smoothed_coords_df.empty:
-            print("❌ No coordinate data provided")
-            return False
-        
-        print(f"✅ Found {len(smoothed_coords_df)} coordinate frames")
-        
-        # Validate coordinate data structure
-        required_columns = ['t_ms', 'crop_x', 'crop_y', 'crop_w', 'crop_h']
-        missing_columns = [col for col in required_columns if col not in smoothed_coords_df.columns]
-        
-        if missing_columns:
-            print(f"❌ Missing required columns: {missing_columns}")
-            return False
-        
-        print("✅ Coordinate data structure is valid")
-        
-        # Check coordinate ranges
-        for idx, row in smoothed_coords_df.iterrows():
-            if row['crop_w'] <= 0 or row['crop_h'] <= 0:
-                print(f"❌ Invalid dimensions at frame {idx}: w={row['crop_w']}, h={row['crop_h']}")
-                return False
-            
-            if row['crop_x'] < 0 or row['crop_y'] < 0:
-                print(f"⚠️ Negative coordinates at frame {idx}: x={row['crop_x']}, y={row['crop_y']}")
-        
-        print("✅ Coordinate ranges are valid")
-        
-        # Test coordinate to frame mapping
-        fps = 30.0  # Assume 30fps for test
-        frame_count = 0
-        coords_dict = {}
-        
-        for _, row in smoothed_coords_df.iterrows():
-            frame_num = int(row['t_ms'] / 1000.0 * fps) + 1
-            coords_dict[frame_num] = {
-                'x': int(row['crop_x']),
-                'y': int(row['crop_y']),
-                'w': int(row['crop_w']) & ~1,  # Ensure even
-                'h': int(row['crop_h']) & ~1   # Ensure even
-            }
-            frame_count += 1
-        
-        print(f"✅ Generated coordinate mapping for {len(coords_dict)} frames")
-        
-        # Test with sample frame if output path provided
-        if output_path:
-            test_data = {
-                'frame_count': frame_count,
-                'coordinate_mapping': list(coords_dict.keys())[:10],  # First 10 frames
-                'sample_coords': coords_dict[min(coords_dict.keys())] if coords_dict else None
-            }
-            
-            # Save test data as JSON
-            test_file = output_path.replace('.mp4', '_dynamic_crop_test.json')
-            with open(test_file, 'w') as f:
-                json.dump(test_data, f, indent=2)
-            print(f"💾 Test data saved to: {test_file}")
-        
-        print("✅ Frame-by-frame dynamic cropping test passed")
-        return True
-        
-    except Exception as e:
-        print(f"❌ Dynamic cropping test failed: {e}")
-        return False
-
-
-if __name__ == "__main__":
-    # Check if command line arguments are provided
-    import sys
-    
-    if len(sys.argv) > 1:
-        # Command line interface
-        args = parse_arguments()
-        
-        print(f"🚀 AI CAMERAMAN PIPELINE")
-        print(f"Input: {args.input_video}")
-        print(f"Output: {args.output_video}")
-        print(f"Mode: {args.mode}, Quality: {args.quality}")
-        print("=" * 60)
-        
-        # Check if input file exists
-        input_file_path = args.input_video
-        
-        if not os.path.exists(input_file_path):
-            # Try looking in the videos folder relative to script
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            project_root = os.path.abspath(os.path.join(script_dir, ".."))
-            videos_path = os.path.join(project_root, "videos", os.path.basename(args.input_video))
-            
-            if os.path.exists(videos_path):
-                input_file_path = videos_path
-                print(f"📁 Found input file in videos folder: {videos_path}")
-            else:
-                print(f"❌ Input file not found in:")
-                print(f"   Current path: {args.input_video}")
-                print(f"   Videos folder: {videos_path}")
-                sys.exit(1)
-        
-        # Update args to use the found path
-        args.input_video = input_file_path
-        
-        # Handle output path - use outputs folder if no directory specified
-        if not os.path.dirname(args.output_video):
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            project_root = os.path.abspath(os.path.join(script_dir, ".."))
-            outputs_dir = os.path.join(project_root, "outputs")
-            os.makedirs(outputs_dir, exist_ok=True)
-            args.output_video = os.path.join(outputs_dir, args.output_video)
-            print(f"📁 Output will be saved to: {args.output_video}")
-        
-        try:
-            # Main processing
-            if args.watermark_text or args.watermark_image:
-                # Process with watermark
-                # First run the main pipeline to get coordinates
-                temp_output = args.output_video.replace('.mp4', '_temp.mp4')
-                
-                success = process_and_render_complete(
-                    args.input_video,
-                    temp_output,
-                    padding_factor=args.padding,
-                    smoothing_strength=args.smoothing,
-                    interpolation_method=args.interpolation,
-                    rendering_mode=args.mode,
-                    quality_preset=args.quality,
-                    enable_stabilization=args.stabilize,
-                    color_correction=args.color_correct,
-                    save_intermediate_files=args.save_analysis,
-                    video_codec=args.codec,
-                    bitrate=args.bitrate,
-                    scale_resolution=args.resolution,
-                    verbose=args.verbose
-                )
-                
-                if success:
-                    # Load coordinates for watermark rendering
-                    coords_file = temp_output.replace('.mp4', '_analysis_04_smoothed_coordinates.csv')
-                    if os.path.exists(coords_file):
-                        import pandas as pd
-                        smoothed_coords = pd.read_csv(coords_file)
-                        
-                        success = render_with_watermark(
-                            args.input_video,
-                            args.output_video,
-                            smoothed_coords,
-                            watermark_text=args.watermark_text,
-                            watermark_image=args.watermark_image,
-                            watermark_position=args.watermark_position,
-                            render_kwargs={
-                                'video_codec': args.codec,
-                                'bitrate': args.bitrate,
-                                'scale_resolution': args.resolution
-                            }
-                        )
-                        
-                        # Clean up temp file
-                        if os.path.exists(temp_output):
-                            os.remove(temp_output)
-                
-            else:
-                # Standard processing
-                success = process_and_render_complete(
-                    args.input_video,
-                    args.output_video,
-                    padding_factor=args.padding,
-                    smoothing_strength=args.smoothing,
-                    interpolation_method=args.interpolation,
-                    rendering_mode=args.mode,
-                    quality_preset=args.quality,
-                    enable_stabilization=args.stabilize,
-                    color_correction=args.color_correct,
-                    save_intermediate_files=args.save_analysis,
-                    video_codec=args.codec,
-                    bitrate=args.bitrate,
-                    scale_resolution=args.resolution,
-                    verbose=args.verbose
-                )
-            
-            # Create preview if requested
-            if success and args.preview:
-                coords_file = args.output_video.replace('.mp4', '_analysis_04_smoothed_coordinates.csv')
-                if os.path.exists(coords_file):
-                    import pandas as pd
-                    smoothed_coords = pd.read_csv(coords_file)
-                    preview_path = args.output_video.replace('.mp4', '_preview.mp4')
-                    create_preview_video(args.input_video, preview_path, smoothed_coords)
-            
-            # Analyze quality if requested
-            if success and args.analyze_quality:
-                print("\n📊 QUALITY ANALYSIS")
-                print("Original:")
-                analyze_video_quality(args.input_video)
-                print("\nProcessed:")
-                analyze_video_quality(args.output_video)
-            
-            if success:
-                print(f"\n🎉 Processing complete!")
-                print(f"✅ Output: {args.output_video}")
-            else:
-                print(f"\n❌ Processing failed!")
-                sys.exit(1)
-                
-        except KeyboardInterrupt:
-            print("\n🛑 Processing interrupted by user")
-            sys.exit(1)
-        except Exception as e:
-            print(f"\n❌ Unexpected error: {e}")
-            import traceback
-            traceback.print_exc()
-            sys.exit(1)
-    
-    else:
-        # Interactive mode - existing behavior
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.abspath(os.path.join(script_dir, ".."))
-        
-        input_video_path = os.path.join(project_root, "videos", "waterpolo_trimmed.webm")
-        output_video_path = os.path.join(project_root, "outputs", "waterpolo_final.mp4")
-        
-        # Check if we have existing results for quick render
-        crop_filter_path = os.path.join(project_root, "outputs", "waterpolo_analysis_05_crop_filter.txt")
-        
-        if os.path.exists(crop_filter_path):
-            print("Found existing analysis results. Choose:")
-            print("1. Quick render with existing results")
-            print("2. Full pipeline (re-analyze)")
-            print("3. Demo advanced features")
-            
-            # For automation, just do quick render
-            choice = input("Enter choice (1/2/3) or press Enter for quick render: ").strip()
-            
-            if choice == "2":
-                print("Running complete pipeline...")
-                success = process_and_render_complete(
-                    input_video_path,
-                    output_video_path,
-                    rendering_mode='simple',
-                    quality_preset='medium'
-                )
-            elif choice == "3":
-                print("Running advanced features demo...")
-                demo_advanced_features()
-                success = True
-            else:
-                print("Doing quick render with existing results...")
-                success = quick_render_example()
-                
-        else:
-            print("No existing results found. Running complete pipeline...")
-            success = process_and_render_complete(
-                input_video_path,
-                output_video_path,
-                rendering_mode='simple',
-                quality_preset='medium'
-            )
-        
-        if success:
-            print("\n🎊 All done! Your AI-cropped video is ready.")
-        else:
-            print("\n💥 Something went wrong. Check the logs above.") 
+        return False 
