@@ -116,7 +116,7 @@ def render_cropped_video_dynamic(
     video_codec: str = "h264_videotoolbox",
     quality_preset: str = "medium",
     bitrate: str = "15M",
-    scale_resolution: str = "1920:1080",
+    scale_resolution: str = "original",
     audio_codec: str = "aac",
     enable_stabilization: bool = False,
     color_correction: bool = False,
@@ -127,12 +127,25 @@ def render_cropped_video_dynamic(
     video_info = get_video_info(input_video_path)
     fps = video_info.get("fps", 29.97)
     has_audio = video_info.get("has_audio", False)
+    original_width = video_info.get("width", 1920)
+    original_height = video_info.get("height", 1080)
     
     print("🎬 Dynamic Cropping Render (Frame-by-Frame)")
     print(f"Input: {input_video_path}")
-    print(f"Resolution: {video_info.get('width')}x{video_info.get('height')} @ {fps:.2f} fps")
+    print(f"Resolution: {original_width}x{original_height} @ {fps:.2f} fps")
     print(f"Frames to process: {len(smoothed_coords_df)}")
     print("Audio:", "present" if has_audio else "none")
+    
+    # Determine target resolution for scaling
+    if scale_resolution == "original":
+        # Use the highest crop resolution from the coordinates
+        max_crop_width = int(smoothed_coords_df['crop_w'].max())
+        max_crop_height = int(smoothed_coords_df['crop_h'].max())
+        target_scale_resolution = f"{max_crop_width}:{max_crop_height}"
+        print(f"🎯 Using adaptive resolution: {target_scale_resolution} (based on crop data)")
+    else:
+        target_scale_resolution = scale_resolution
+        print(f"🎯 Using specified resolution: {target_scale_resolution}")
     
     # Create temporary directory for frame processing
     with tempfile.TemporaryDirectory(prefix="dynamic_crop_") as temp_dir:
@@ -194,18 +207,17 @@ def render_cropped_video_dynamic(
                 
                 x, y, w, h = coords['x'], coords['y'], coords['w'], coords['h']
                 
+                # Validate coordinates are within original frame bounds
+                x = max(0, min(x, original_width - w))
+                y = max(0, min(y, original_height - h))
+                w = min(w, original_width - x)
+                h = min(h, original_height - y)
+                
                 if HAS_OPENCV:
                     # Use OpenCV for cropping (faster)
                     try:
                         img = cv2.imread(frame_path)
                         if img is not None:
-                            # Ensure crop bounds are within image
-                            img_h, img_w = img.shape[:2]
-                            x = max(0, min(x, img_w - w))
-                            y = max(0, min(y, img_h - h))
-                            w = min(w, img_w - x)
-                            h = min(h, img_h - y)
-                            
                             cropped = img[y:y+h, x:x+w]
                             cv2.imwrite(output_frame_path, cropped)
                             success_count += 1
@@ -268,9 +280,9 @@ def render_cropped_video_dynamic(
             # Build filter chain
             filters = []
             
-            # Scale to target resolution
-            if scale_resolution and scale_resolution != "original":
-                filters.append(f"scale={scale_resolution}:flags=lanczos")
+            # Scale to target resolution (only if not using original/adaptive resolution)
+            if target_scale_resolution != "original" and ":" in target_scale_resolution:
+                filters.append(f"scale={target_scale_resolution}:flags=lanczos")
             
             # Add stabilization if enabled
             if enable_stabilization:
@@ -479,7 +491,7 @@ def render_cropped_video_simple(
     smoothed_coords_df: pd.DataFrame,
     video_codec: str = 'h264_videotoolbox',
     bitrate: str = '15M',
-    scale_resolution: str = '1920:1080',
+    scale_resolution: str = 'original',
     audio_codec: str = 'aac',
     verbose: bool = True
 ) -> bool:
@@ -490,6 +502,8 @@ def render_cropped_video_simple(
     # --- gather basic info --------------------------------------------------
     video_info = get_video_info(input_video_path)
     has_audio = video_info.get('has_audio', False)
+    original_width = video_info.get("width", 1920)
+    original_height = video_info.get("height", 1080)
 
     # average crop rectangle (ensure even dims)
     avg_x = int(smoothed_coords_df['crop_x'].mean())
@@ -498,17 +512,31 @@ def render_cropped_video_simple(
     avg_h = int(smoothed_coords_df['crop_h'].mean()) & ~1  # even height
 
     print(f"Using average crop: {avg_w}x{avg_h} at ({avg_x},{avg_y})")
+    print(f"Original video: {original_width}x{original_height}")
     print("Audio stream:" + (" present" if has_audio else " none"))
+
+    # Determine target resolution for scaling
+    if scale_resolution == "original":
+        # Use the average crop dimensions
+        target_scale_resolution = f"{avg_w}:{avg_h}"
+        print(f"🎯 Using adaptive resolution: {target_scale_resolution} (based on crop)")
+    else:
+        target_scale_resolution = scale_resolution
+        print(f"🎯 Using specified resolution: {target_scale_resolution}")
 
     # -----------------------------------------------------------------------
     os.makedirs(os.path.dirname(output_video_path), exist_ok=True)
 
     # build safe filter graph:
     #   1) crop  ➜  2) scale  ➜  label [outv]
-    filter_graph = (
-        f"[0:v]crop={avg_w}:{avg_h}:{avg_x}:{avg_y},"
-        f"scale={scale_resolution}[outv]"
-    )
+    if target_scale_resolution == "original" or ":" not in target_scale_resolution:
+        # No scaling needed
+        filter_graph = f"[0:v]crop={avg_w}:{avg_h}:{avg_x}:{avg_y}[outv]"
+    else:
+        filter_graph = (
+            f"[0:v]crop={avg_w}:{avg_h}:{avg_x}:{avg_y},"
+            f"scale={target_scale_resolution}[outv]"
+        )
 
     cmd = [
         "ffmpeg", "-y",
@@ -534,7 +562,7 @@ def render_cropped_video_simple(
     try:
         subprocess.run(cmd, capture_output=not verbose, text=True, check=True)
         size_mb = os.path.getsize(output_video_path) / (1024 * 1024)
-        print(f"✅ Video rendered – {size_mb:.1f} MB")
+        print(f"✅ Video rendered – {size_mb:.1f} MB")
         return True
     except subprocess.CalledProcessError as e:
         print(f"❌ FFmpeg error: {e}")
@@ -556,7 +584,7 @@ def render_cropped_video(
     rendering_mode: str = 'simple',  # 'simple', 'dynamic', 'multipass'
     quality_preset: str = 'medium',
     bitrate: str = '15M',
-    scale_resolution: str = '1920:1080',
+    scale_resolution: str = 'original',  # Changed default to 'original'
     audio_codec: str = 'aac',
     enable_stabilization: bool = False,
     color_correction: bool = False,
@@ -1241,7 +1269,7 @@ def parse_arguments():
     parser.add_argument('--codec', choices=['h264_videotoolbox', 'libx264', 'hevc_videotoolbox'], 
                        default='h264_videotoolbox', help='Video codec')
     parser.add_argument('--bitrate', default='15M', help='Target bitrate (e.g., 15M)')
-    parser.add_argument('--resolution', default='1920:1080', help='Target resolution (e.g., 1920:1080)')
+    parser.add_argument('--resolution', default='original', help='Target resolution (e.g., 1920:1080, or "original" for adaptive)')
     
     # Advanced features
     parser.add_argument('--stabilize', action='store_true', help='Enable video stabilization')

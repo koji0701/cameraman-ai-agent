@@ -3,31 +3,30 @@ import numpy as np
 from typing import Tuple, Union
 
 
-def normalize_bounding_boxes_to_1080p(
+def normalize_bounding_boxes_to_video_resolution(
     df: pd.DataFrame, 
-    original_width: int = 1920, 
-    original_height: int = 1080,
-    target_width: int = 1920,
-    target_height: int = 1080,
+    original_width: int,
+    original_height: int,
+    target_aspect_ratio: float = 16/9,  # Default to 16:9 but can be overridden
     padding_factor: float = 1.1
 ) -> pd.DataFrame:
     """
-    Normalize bounding boxes to 1920x1080 crop coordinates with optimal zoom.
+    Normalize bounding boxes to optimal crop coordinates while preserving original video resolution.
     
     Args:
         df: DataFrame with columns ['t_ms', 'x1', 'y1', 'x2', 'y2']
         original_width: Width of the source video frame
         original_height: Height of the source video frame  
-        target_width: Target crop width (1920)
-        target_height: Target crop height (1080)
+        target_aspect_ratio: Desired aspect ratio for crops (default 16:9)
         padding_factor: Additional padding around bounding box (1.1 = 10% padding)
         
     Returns:
         DataFrame with normalized crop coordinates ['t_ms', 'crop_x', 'crop_y', 'crop_w', 'crop_h']
     """
     
-    # Target aspect ratio (16:9 for 1920x1080)
-    target_aspect_ratio = target_width / target_height
+    print(f"🎯 Normalizing coordinates for {original_width}x{original_height} video")
+    print(f"   Target aspect ratio: {target_aspect_ratio:.2f}:1")
+    print(f"   Padding factor: {padding_factor}")
     
     normalized_crops = []
     
@@ -70,6 +69,29 @@ def normalize_bounding_boxes_to_1080p(
         })
     
     return pd.DataFrame(normalized_crops)
+
+
+def normalize_bounding_boxes_to_1080p(
+    df: pd.DataFrame, 
+    original_width: int = 1920, 
+    original_height: int = 1080,
+    target_width: int = 1920,
+    target_height: int = 1080,
+    padding_factor: float = 1.1
+) -> pd.DataFrame:
+    """
+    DEPRECATED: Use normalize_bounding_boxes_to_video_resolution instead.
+    
+    This function is maintained for backward compatibility but should not be used
+    for new implementations as it assumes fixed 1920x1080 resolution.
+    """
+    print("⚠️ normalize_bounding_boxes_to_1080p is deprecated.")
+    print("⚠️ Use normalize_bounding_boxes_to_video_resolution for proper resolution handling.")
+    
+    target_aspect_ratio = target_width / target_height
+    return normalize_bounding_boxes_to_video_resolution(
+        df, original_width, original_height, target_aspect_ratio, padding_factor
+    )
 
 
 def calculate_optimal_crop_size(
@@ -209,7 +231,7 @@ if __name__ == "__main__":
     print("Original bounding boxes:")
     print(df)
     
-    normalized = normalize_bounding_boxes_to_1080p(df)
+    normalized = normalize_bounding_boxes_to_video_resolution(df, 1920, 1080)
     print("\nNormalized crop coordinates:")
     print(normalized)
     

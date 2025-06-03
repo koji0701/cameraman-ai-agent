@@ -2,7 +2,7 @@ import os, re, json, pandas as pd
 from google import genai
 from dotenv import load_dotenv
 import time
-from normalize_coordinates import normalize_bounding_boxes_to_1080p, generate_ffmpeg_crop_filter, analyze_crop_quality
+from normalize_coordinates import normalize_bounding_boxes_to_video_resolution, normalize_bounding_boxes_to_1080p, generate_ffmpeg_crop_filter, analyze_crop_quality
 from kalman_smoother import interpolate_and_smooth_coordinates, generate_smooth_ffmpeg_filter, analyze_motion_smoothness
 
 load_dotenv()
@@ -14,6 +14,36 @@ _PROMPT = (
 
 print("Initializing Gemini client...")
 client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))  
+
+def get_video_dimensions(video_path: str) -> tuple[int, int]:
+    """Get video dimensions using ffprobe"""
+    import subprocess
+    
+    try:
+        cmd = [
+            'ffprobe',
+            '-v', 'quiet',
+            '-print_format', 'json',
+            '-show_streams',
+            video_path
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        info = json.loads(result.stdout)
+        
+        # Extract video stream info
+        video_stream = next(s for s in info['streams'] if s['codec_type'] == 'video')
+        
+        width = int(video_stream['width'])
+        height = int(video_stream['height'])
+        
+        print(f"📺 Detected video resolution: {width}x{height}")
+        return width, height
+        
+    except Exception as e:
+        print(f"⚠️ Could not detect video dimensions: {e}")
+        print("🔄 Falling back to default 1920x1080")
+        return 1920, 1080
 
 def upload_and_prompt(mp4_path: str) -> pd.DataFrame:
     """Upload video to Gemini and get bounding box coordinates"""
@@ -55,30 +85,45 @@ def upload_and_prompt(mp4_path: str) -> pd.DataFrame:
 
 def process_video_complete_pipeline(
     mp4_path: str, 
-    original_width: int = 1920, 
-    original_height: int = 1080,
+    original_width: int = None,  # Now optional - will auto-detect if not provided
+    original_height: int = None, # Now optional - will auto-detect if not provided
     padding_factor: float = 1.1,
     smoothing_strength: str = 'balanced',
     interpolation_method: str = 'cubic',
-    output_crop_file: str = None
+    output_crop_file: str = None,
+    preserve_aspect_ratio: bool = True  # New option to preserve original aspect ratio
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict, dict, str]:
     """
     Complete pipeline: Upload → Gemini Analysis → Normalize → Kalman Smooth → FFmpeg Ready
     
     Args:
         mp4_path: Path to input video file
-        original_width: Source video width
-        original_height: Source video height  
+        original_width: Source video width (auto-detected if None)
+        original_height: Source video height (auto-detected if None)
         padding_factor: Extra padding around bounding boxes (1.1 = 10%)
         smoothing_strength: 'minimal', 'balanced', 'maximum', or 'cinematic'
         interpolation_method: 'cubic', 'linear', or 'quadratic'
         output_crop_file: Optional path to save crop filter file
+        preserve_aspect_ratio: If True, uses original video aspect ratio; if False, uses 16:9
         
     Returns:
         Tuple of (original_boxes_df, normalized_crops_df, smoothed_df, quality_metrics, motion_metrics, ffmpeg_filter)
     """
     
     print(f"=== PROCESSING VIDEO: {mp4_path} ===")
+    
+    # Auto-detect video dimensions if not provided
+    if original_width is None or original_height is None:
+        print("🔍 Auto-detecting video resolution...")
+        original_width, original_height = get_video_dimensions(mp4_path)
+    
+    # Calculate target aspect ratio
+    if preserve_aspect_ratio:
+        target_aspect_ratio = original_width / original_height
+        print(f"🎯 Using original aspect ratio: {target_aspect_ratio:.2f}:1")
+    else:
+        target_aspect_ratio = 16/9
+        print(f"🎯 Using standard 16:9 aspect ratio")
     
     # Step 1: Get bounding boxes from Gemini
     print("Step 1: Getting bounding boxes from Gemini...")
@@ -89,12 +134,13 @@ def process_video_complete_pipeline(
     
     print(f"✓ Detected {len(original_boxes)} bounding boxes")
     
-    # Step 2: Normalize coordinates for optimal cropping
-    print("Step 2: Normalizing coordinates for 1920x1080 output...")
-    normalized_crops = normalize_bounding_boxes_to_1080p(
+    # Step 2: Normalize coordinates for the actual video resolution
+    print(f"Step 2: Normalizing coordinates for {original_width}x{original_height} video...")
+    normalized_crops = normalize_bounding_boxes_to_video_resolution(
         original_boxes,
         original_width=original_width,
-        original_height=original_height, 
+        original_height=original_height,
+        target_aspect_ratio=target_aspect_ratio,
         padding_factor=padding_factor
     )
     
@@ -137,6 +183,8 @@ def process_video_complete_pipeline(
     
     # Print comprehensive summary
     print(f"\n=== PROCESSING COMPLETE ===")
+    print(f"Video resolution: {original_width}x{original_height}")
+    print(f"Target aspect ratio: {target_aspect_ratio:.2f}:1")
     print(f"Original keyframes: {len(original_boxes)}")
     print(f"Normalized crops: {len(normalized_crops)}")
     print(f"Smooth frames: {len(smoothed_coords)}")
