@@ -25,7 +25,7 @@ from render_video import (
 
 class TestFFmpegPerformance(unittest.TestCase):
     """Performance tests for FFmpeg implementations"""
-
+    
     def setUp(self):
         """Set up test fixtures"""
         self.test_dir = tempfile.mkdtemp()
@@ -84,8 +84,8 @@ class TestFFmpegPerformance(unittest.TestCase):
             )
             
         end_time = time.time()
-        elapsed = end_time - start_time
-        
+            elapsed = end_time - start_time
+            
         self.assertTrue(result)
         self.assertLess(elapsed, 10.0, f"Processing 1000 frames took too long: {elapsed:.2f}s")
 
@@ -114,14 +114,14 @@ class TestFFmpegPerformance(unittest.TestCase):
             mock_imread.return_value = MagicMock()
             mock_imwrite.return_value = True
             
-            result = render_cropped_video_dynamic(
+                result = render_cropped_video_dynamic(
                 self.input_video,
                 self.output_video,
                 very_large_coords,
                 verbose=False
-            )
-            
-        self.assertTrue(result)
+                )
+                
+                self.assertTrue(result)
 
     @patch('render_video.subprocess.run')
     @patch('render_video.get_video_info')
@@ -148,7 +148,7 @@ class TestFFmpegPerformance(unittest.TestCase):
             'crop_h': np.random.uniform(600, 800, 300)
         })
         
-        start_time = time.time()
+            start_time = time.time()
         
         with patch('render_video.HAS_OPENCV', True), \
              patch('render_video.cv2.imread') as mock_imread, \
