@@ -4,9 +4,23 @@ from dotenv import load_dotenv
 import time
 from normalize_coordinates import normalize_bounding_boxes_to_video_resolution, normalize_bounding_boxes_to_1080p, generate_ffmpeg_crop_filter, analyze_crop_quality
 from kalman_smoother import interpolate_and_smooth_coordinates, generate_smooth_ffmpeg_filter, analyze_motion_smoothness
+import numpy as np
 
 load_dotenv()
 
+def create_dynamic_prompt(width: int, height: int, aspect_ratio: float) -> str:
+    """Generate AI prompt with video-specific dimensions for optimal keyframes"""
+    return f"""this is footage from a water polo game. i want you to draw a box around the main action of the game (where the majority of the players are, and if a team is scoring or on offense, the box should include the goal they want to score on). the purpose of this box is to determine the optimal zoom in frame for the camerman, as in many frames, the camera should have been more zoomed in. go at 1 fps and go in intervals of one second. you will be returning data about the timestamp and the coordinates of the box (top left x, top left y, bottom right x, bottom right y).  
+
+The video is {width}x{height} pixels and {aspect_ratio:.2f} aspect ratio, so when determining the box, use these pixel values for x and y coordinates. Further, preserve the aspect ratio when determining the proper coordinates.
+
+For smooth camera panning: ensure the boxes you draw will create natural camera movement when interpolated between keyframes. Consider the motion flow of the game.
+
+do not overcrop, if the width is much wider than the height so that the aspect ratio isn't preserved, increase the height in both the y1 and y2 so that the aspect ratio is preserved, but keep the box centered on the main action. vice versa for if the height is too long, increase the width so that the aspect ratio is preserved  but keep the box centered on the main action. when doing this adjustment, prioritize being sure that the pixels do not go out of bounds of the video (keep within the provided dimensions) over being centered on the main action, meaning that in some cases it may be necessary to only add more width or height to one side rather than the other side.
+
+Reply as JSON list of objects {{t_ms:int,x1:int,y1:int,x2:int,y2:int}}."""
+
+# Legacy prompt for backward compatibility
 _PROMPT = (
     "this is footage from a water polo game. i want you to draw a box around the main action of the game (where the majority of the players are, and if a team is scoring or on offense, the box should include the goal they want to score on). the purpose of this box is to determine the optimal zoom in frame for the camerman, as in many frames, the camera should have been more zoomed in. go at 1 fps and go in intervals of three seconds. you will be returning data about the timestamp and the coordinates of the box (top left x, top left y, bottom right x, bottom right y)."
     "Reply as JSON list of objects {{t_ms:int,x1:int,y1:int,x2:int,y2:int}}."
@@ -45,8 +59,17 @@ def get_video_dimensions(video_path: str) -> tuple[int, int]:
         print("🔄 Falling back to default 1920x1080")
         return 1920, 1080
 
-def upload_and_prompt(mp4_path: str) -> pd.DataFrame:
-    """Upload video to Gemini and get bounding box coordinates"""
+def upload_and_prompt(mp4_path: str, custom_prompt: str = None) -> pd.DataFrame:
+    """Upload video to Gemini and get bounding box coordinates with enhanced prompt"""
+    
+    # Get video dimensions for dynamic prompt
+    width, height = get_video_dimensions(mp4_path)
+    aspect_ratio = width / height
+    
+    # Use dynamic prompt unless custom one provided
+    prompt = custom_prompt or create_dynamic_prompt(width, height, aspect_ratio)
+    
+    print(f"🎯 Using AI prompt with {width}x{height} dimensions, {aspect_ratio:.2f} aspect ratio")
     print("uploading file")
     file_ref = client.files.upload(file=mp4_path)
     print(f"file uploaded: {file_ref.name}, state: {file_ref.state}")
@@ -61,12 +84,14 @@ def upload_and_prompt(mp4_path: str) -> pd.DataFrame:
         print(f"Re-checked file state: {file_ref.state.name}")
 
     print(f"File {file_ref.name} is now ACTIVE.")
+    
+
 
     # Now that the file is active, you can use it in generate_content
-    print("Generating content with the file...")
+    print("Generating content with enhanced prompt...")
     resp = client.models.generate_content(
         model="gemini-2.5-flash-preview-05-20", 
-        contents=[file_ref, _PROMPT]
+        contents=[file_ref, prompt],  # Use the dynamic prompt
     )
     print("response received")
     
@@ -78,9 +103,181 @@ def upload_and_prompt(mp4_path: str) -> pd.DataFrame:
         return pd.DataFrame() # Return empty DataFrame or raise an error
         
     boxes_json = boxes_json_match.group()
-    records = json.loads(boxes_json)
+    
+    # Clean up common JSON issues from AI responses
+    try:
+        # First, try direct parsing
+        records = json.loads(boxes_json)
+    except json.JSONDecodeError as e:
+        print(f"Initial JSON parsing failed: {e}")
+        print("Attempting to clean JSON response...")
+        
+        # Clean up common AI JSON issues
+        cleaned_json = boxes_json
+        
+        # Fix common issues:
+        # 1. Trailing commas
+        cleaned_json = re.sub(r',(\s*[}\]])', r'\1', cleaned_json)
+        
+        # 2. Comments (// style)
+        cleaned_json = re.sub(r'//.*$', '', cleaned_json, flags=re.MULTILINE)
+        
+        # 3. Single quotes to double quotes for properties
+        cleaned_json = re.sub(r"'(\w+)':", r'"\1":', cleaned_json)
+        
+        # 4. Missing quotes around string values
+        cleaned_json = re.sub(r':(\s*)([a-zA-Z_][a-zA-Z0-9_]*)', r':\1"\2"', cleaned_json)
+        
+        # 5. Extra text after JSON
+        cleaned_json = re.search(r'\[.*\]', cleaned_json, re.S)
+        if cleaned_json:
+            cleaned_json = cleaned_json.group()
+        else:
+            print("Error: Could not extract valid JSON structure after cleaning")
+            print("Original response:", resp.text)
+            return pd.DataFrame()
+        
+        try:
+            records = json.loads(cleaned_json)
+            print("✅ Successfully parsed JSON after cleaning")
+        except json.JSONDecodeError as e2:
+            print(f"JSON parsing still failed after cleaning: {e2}")
+            print("Cleaned JSON:", cleaned_json)
+            print("Original response:", resp.text)
+            return pd.DataFrame()
+    
     print("records loaded")
     return pd.DataFrame(records)
+
+
+def convert_boxes_to_crops(boxes_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert AI bounding boxes to crop coordinates (minimal processing needed)
+    
+    Since the AI now receives video dimensions and handles normalization,
+    we only need simple box-to-crop conversion without complex processing.
+    
+    Args:
+        boxes_df: DataFrame with columns ['t_ms', 'x1', 'y1', 'x2', 'y2']
+        
+    Returns:
+        DataFrame with crop coordinates ['t_ms', 'crop_x', 'crop_y', 'crop_w', 'crop_h']
+    """
+    
+    crops = []
+    
+    for _, row in boxes_df.iterrows():
+        x1, y1, x2, y2 = int(row['x1']), int(row['y1']), int(row['x2']), int(row['y2'])
+        
+        # Basic validation
+        if x2 <= x1 or y2 <= y1:
+            print(f"Warning: Invalid bounding box at t={row['t_ms']}ms: ({x1},{y1},{x2},{y2})")
+            continue
+        
+        crops.append({
+            't_ms': row['t_ms'],
+            'crop_x': x1,
+            'crop_y': y1,
+            'crop_w': x2 - x1,
+            'crop_h': y2 - y1
+        })
+    
+    return pd.DataFrame(crops)
+
+
+def process_video_enhanced_pipeline(
+    mp4_path: str,
+    smoothing_strength: str = 'balanced',
+    interpolation_method: str = 'cubic',
+    output_crop_file: str = None
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict, dict, str]:
+    """
+    Enhanced pipeline: Upload → Gemini Analysis → Direct Interpolation → Kalman Smooth → FFmpeg Ready
+    
+    This is the new improved pipeline that eliminates redundant normalization since
+    the AI now handles video dimensions and aspect ratio directly.
+    
+    Args:
+        mp4_path: Path to input video file
+        smoothing_strength: 'minimal', 'balanced', 'maximum', or 'cinematic'
+        interpolation_method: 'cubic', 'linear', or 'quadratic'
+        output_crop_file: Optional path to save crop filter file
+        
+    Returns:
+        Tuple of (original_boxes_df, crop_coords_df, smoothed_df, quality_metrics, motion_metrics, ffmpeg_filter)
+    """
+    
+    print(f"🚀 ENHANCED AI CAMERAMAN PIPELINE")
+    print(f"=== PROCESSING VIDEO: {mp4_path} ===")
+    
+    # Step 1: Get optimized bounding boxes from Gemini (now with proper dimensions)
+    print("Step 1: Getting optimized bounding boxes from Gemini...")
+    original_boxes = upload_and_prompt(mp4_path)
+    
+    if original_boxes.empty:
+        raise ValueError("No bounding boxes detected by Gemini")
+    
+    print(f"✓ Detected {len(original_boxes)} bounding boxes")
+    
+    # Step 2: Convert bounding boxes to crop coordinates (minimal processing)
+    print("Step 2: Converting bounding boxes to crop coordinates...")
+    crop_coords = convert_boxes_to_crops(original_boxes)
+    
+    # Add zoom factors for quality analysis
+    width, height = get_video_dimensions(mp4_path)
+    crop_coords['zoom_factor'] = np.minimum(
+        width / crop_coords['crop_w'],
+        height / crop_coords['crop_h']
+    )
+    
+    print(f"✓ Converted {len(crop_coords)} crop coordinates")
+    
+    # Step 3: Apply existing excellent interpolation and smoothing
+    print("Step 3: Creating smooth panning with interpolation and Kalman filtering...")
+    smoothed_coords = interpolate_and_smooth_coordinates(
+        crop_coords,
+        video_path=mp4_path,
+        smoothing_strength=smoothing_strength,
+        interpolation_method=interpolation_method
+    )
+    
+    print(f"✓ Generated {len(smoothed_coords)} smooth frames")
+    
+    # Step 4: Generate quality analysis (using simplified metrics)
+    print("Step 4: Analyzing quality and motion metrics...")
+    quality_metrics = analyze_crop_quality(original_boxes, crop_coords)
+    
+    # Detect video FPS for motion analysis
+    try:
+        import av
+        with av.open(mp4_path) as container:
+            video_fps = float(container.streams.video[0].average_rate)
+    except:
+        video_fps = 30.0
+    
+    motion_metrics = analyze_motion_smoothness(smoothed_coords, video_fps)
+    
+    # Step 5: Generate FFmpeg crop filter
+    print("Step 5: Generating FFmpeg crop filter...")
+    ffmpeg_filter = generate_smooth_ffmpeg_filter(smoothed_coords)
+    
+    # Step 6: Optionally save crop filter to file
+    if output_crop_file:
+        with open(output_crop_file, 'w') as f:
+            f.write(ffmpeg_filter)
+        print(f"✓ Crop filter saved to: {output_crop_file}")
+    
+    # Print comprehensive summary
+    print(f"\n🎯 ENHANCED PROCESSING COMPLETE")
+    print(f"Original keyframes: {len(original_boxes)}")
+    print(f"Crop coordinates: {len(crop_coords)}")
+    print(f"Smooth frames: {len(smoothed_coords)}")
+    print(f"Video duration: {motion_metrics['frame_stats']['duration_seconds']:.1f} seconds")
+    print(f"Average zoom: {quality_metrics['average_zoom']:.2f}x")
+    print(f"Motion smoothness: {motion_metrics['motion_analysis']['speed_consistency']:.2f}")
+    print(f"✅ Ready for smooth panning render!")
+    
+    return original_boxes, crop_coords, smoothed_coords, quality_metrics, motion_metrics, ffmpeg_filter
 
 
 def process_video_complete_pipeline(

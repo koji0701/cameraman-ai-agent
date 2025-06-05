@@ -7,11 +7,11 @@ import os
 # Add pipelines to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'pipelines'))
 
-from render_video import generate_sendcmd_filter, create_dynamic_crop_filter
+from render_video import generate_smooth_ffmpeg_filter
 
 
 class TestSendcmdGeneration(unittest.TestCase):
-    """Specialized tests for sendcmd filter generation"""
+    """Specialized tests for smooth ffmpeg filter generation (sendcmd-based)"""
     
     def setUp(self):
         """Set up test data"""
@@ -26,7 +26,7 @@ class TestSendcmdGeneration(unittest.TestCase):
     
     def test_sendcmd_basic_structure(self):
         """Test basic sendcmd filter structure"""
-        result = generate_sendcmd_filter(self.basic_coords, fps=30.0)
+        result = generate_smooth_ffmpeg_filter(self.basic_coords, fps=30.0)
         
         # Should wrap in sendcmd filter
         self.assertTrue(result.startswith("sendcmd=c='"))
@@ -41,7 +41,7 @@ class TestSendcmdGeneration(unittest.TestCase):
     def test_sendcmd_timeline_accuracy(self):
         """Test that timeline is accurately converted from t_ms"""
         fps = 29.97
-        result = generate_sendcmd_filter(self.basic_coords, fps=fps)
+        result = generate_smooth_ffmpeg_filter(self.basic_coords, fps=fps)
         
         # Extract timestamps from the result
         lines = result.replace("sendcmd=c='", "").replace("'", "").split('\n')
@@ -60,13 +60,14 @@ class TestSendcmdGeneration(unittest.TestCase):
     
     def test_sendcmd_coordinate_format(self):
         """Test coordinate formatting in sendcmd"""
-        result = generate_sendcmd_filter(self.basic_coords, fps=30.0)
+        result = generate_smooth_ffmpeg_filter(self.basic_coords, fps=30.0)
         
         lines = result.replace("sendcmd=c='", "").replace("'", "").split('\n')
         
         for line in lines:
             if line.strip():
-                parts = line.split()
+                # Remove semicolon at the end before parsing
+                parts = line.rstrip(';').split()
                 
                 # Should have correct format: timestamp crop w WIDTH h HEIGHT x X y Y
                 self.assertEqual(parts[1], 'crop')
@@ -96,7 +97,7 @@ class TestSendcmdGeneration(unittest.TestCase):
             'crop_h': [601, 589]    # Odd heights
         })
         
-        result = generate_sendcmd_filter(odd_coords, fps=30.0)
+        result = generate_smooth_ffmpeg_filter(odd_coords, fps=30.0)
         lines = result.replace("sendcmd=c='", "").replace("'", "").split('\n')
         
         for line in lines:
@@ -117,10 +118,9 @@ class TestSendcmdGeneration(unittest.TestCase):
         """Test handling of empty DataFrame"""
         empty_df = pd.DataFrame()
         
-        with self.assertRaises(ValueError) as context:
-            generate_sendcmd_filter(empty_df)
-        
-        self.assertIn("No crop data supplied", str(context.exception))
+        # Should return empty string for empty dataframe
+        result = generate_smooth_ffmpeg_filter(empty_df)
+        self.assertEqual(result, "")
     
     def test_sendcmd_single_frame(self):
         """Test sendcmd generation with single frame"""
@@ -133,7 +133,7 @@ class TestSendcmdGeneration(unittest.TestCase):
             'crop_h': [600]
         })
         
-        result = generate_sendcmd_filter(single_frame, fps=30.0)
+        result = generate_smooth_ffmpeg_filter(single_frame, fps=30.0)
         
         # Should still be valid
         self.assertTrue(result.startswith("sendcmd=c='"))
@@ -142,7 +142,7 @@ class TestSendcmdGeneration(unittest.TestCase):
     def test_sendcmd_high_fps(self):
         """Test sendcmd generation with high frame rate"""
         high_fps = 120.0
-        result = generate_sendcmd_filter(self.basic_coords, fps=high_fps)
+        result = generate_smooth_ffmpeg_filter(self.basic_coords, fps=high_fps)
         
         # Timeline should use t_ms regardless of FPS
         lines = result.replace("sendcmd=c='", "").replace("'", "").split('\n')
@@ -170,7 +170,7 @@ class TestSendcmdGeneration(unittest.TestCase):
             'crop_h': [600, 610, 590, 595]
         })
         
-        result = generate_sendcmd_filter(precise_coords, fps=30.0)
+        result = generate_smooth_ffmpeg_filter(precise_coords, fps=30.0)
         lines = result.replace("sendcmd=c='", "").replace("'", "").split('\n')
         
         timestamps = []
@@ -195,68 +195,63 @@ class TestSendcmdGeneration(unittest.TestCase):
             'crop_h': [1080, 2160],  # 4K height
         })
         
-        result = generate_sendcmd_filter(large_coords, fps=30.0)
+        result = generate_smooth_ffmpeg_filter(large_coords, fps=30.0)
         
         # Should handle large values without issues
-        self.assertIsInstance(result, str)
-        self.assertIn('3840', result)  # Should contain large width
-        self.assertIn('2160', result)  # Should contain large height
+        self.assertTrue(result.startswith("sendcmd=c='"))
+        self.assertIn('crop w 1920', result)
+        self.assertIn('crop w 3840', result)
     
     def test_sendcmd_negative_coordinates(self):
-        """Test sendcmd with negative coordinates"""
+        """Test sendcmd with negative coordinates (should be accepted)"""
         negative_coords = pd.DataFrame({
             't_ms': [0, 1000],
             'frame_number': [0, 30],
-            'crop_x': [-50, 100],  # Negative X
-            'crop_y': [50, -25],   # Negative Y
-            'crop_w': [1000, 980],
-            'crop_h': [600, 590]
+            'crop_x': [-100, 50],
+            'crop_y': [-50, 25],
+            'crop_w': [1000, 900],
+            'crop_h': [600, 500]
         })
         
-        result = generate_sendcmd_filter(negative_coords, fps=30.0)
+        result = generate_smooth_ffmpeg_filter(negative_coords, fps=30.0)
         
-        # Should still generate valid sendcmd (negatives will be preserved)
-        self.assertIsInstance(result, str)
-        self.assertIn('-50', result)
-        self.assertIn('-25', result)
-    
+        # Should include negative coordinates in output
+        self.assertTrue(result.startswith("sendcmd=c='"))
+        self.assertIn('x -100', result)
+        self.assertIn('y -50', result)
+
     def test_dynamic_crop_filter_complete(self):
-        """Test complete dynamic crop filter creation"""
-        filter_graph = create_dynamic_crop_filter(self.basic_coords, fps=30.0)
+        """Test complete dynamic crop filter generation process"""
+        # This test verifies the integration with the smooth filter function
+        result = generate_smooth_ffmpeg_filter(self.basic_coords, fps=30.0)
         
-        # Should be a complete filter graph
-        self.assertIsInstance(filter_graph, str)
+        # Should be a complete sendcmd filter string
+        self.assertTrue(result.startswith("sendcmd=c='"))
+        self.assertTrue(result.endswith("'"))
         
-        # Should contain all required components
-        self.assertIn('sendcmd', filter_graph)
-        self.assertIn('[crop_cmd]', filter_graph)
-        self.assertIn('crop=w=1920:h=1080', filter_graph)
-        self.assertIn('[cropped]', filter_graph)
-        self.assertIn('scale=1920:1080', filter_graph)
-        self.assertIn('[scaled]', filter_graph)
-        
-        # Should use semicolons to separate filter stages
-        self.assertIn(';', filter_graph)
+        # Should have all coordinate data - 3 lines separated by \n within the sendcmd
+        inner_content = result.replace("sendcmd=c='", "").replace("'", "")
+        lines = [line for line in inner_content.split('\n') if line.strip()]
+        self.assertEqual(len(lines), 3)  # 3 data lines for our test coordinates
     
     def test_dynamic_crop_filter_empty_input(self):
         """Test dynamic crop filter with empty input"""
         empty_df = pd.DataFrame()
-        
-        with self.assertRaises(ValueError):
-            create_dynamic_crop_filter(empty_df)
+        result = generate_smooth_ffmpeg_filter(empty_df)
+        self.assertEqual(result, "")
     
     def test_sendcmd_different_fps_values(self):
         """Test sendcmd generation with various FPS values"""
         fps_values = [23.976, 24.0, 25.0, 29.97, 30.0, 50.0, 59.94, 60.0]
         
         for fps in fps_values:
-            result = generate_sendcmd_filter(self.basic_coords, fps=fps)
+            result = generate_smooth_ffmpeg_filter(self.basic_coords, fps=fps)
             
-            # Should work for all common FPS values
+            # Should generate valid sendcmd regardless of FPS
             self.assertTrue(result.startswith("sendcmd=c='"))
             self.assertIn('crop w', result)
             
-            # Timeline should be consistent regardless of FPS (uses t_ms)
+            # Timeline should be based on t_ms, not FPS
             lines = result.replace("sendcmd=c='", "").replace("'", "").split('\n')
             timestamps = []
             
@@ -265,50 +260,69 @@ class TestSendcmdGeneration(unittest.TestCase):
                     parts = line.split()
                     timestamps.append(float(parts[0]))
             
-            # Should always have 3 timestamps for our test data
-            self.assertEqual(len(timestamps), 3)
-            
-            # Should be in ascending order
-            self.assertEqual(timestamps, sorted(timestamps))
+            # Should always be [0.0, 1.0, 2.0] regardless of FPS
+            expected = [0.0, 1.0, 2.0]
+            for i, exp in enumerate(expected):
+                self.assertAlmostEqual(timestamps[i], exp, places=3)
     
     def test_sendcmd_coordinate_bounds(self):
-        """Test sendcmd generation with extreme coordinate values"""
+        """Test sendcmd with extreme coordinate bounds"""
         extreme_coords = pd.DataFrame({
-            't_ms': [0, 1000, 2000],
-            'frame_number': [0, 30, 60],
-            'crop_x': [0, 32000, 100],      # Very large X
-            'crop_y': [0, 18000, 50],       # Very large Y
-            'crop_w': [100, 32000, 1000],   # From tiny to huge
-            'crop_h': [100, 18000, 600],    # From tiny to huge
-        })
-        
-        result = generate_sendcmd_filter(extreme_coords, fps=30.0)
-        
-        # Should handle extreme values
-        self.assertIsInstance(result, str)
-        self.assertIn('32000', result)
-        self.assertIn('18000', result)
-    
-    def test_sendcmd_fractional_coordinates(self):
-        """Test sendcmd generation with fractional coordinates"""
-        fractional_coords = pd.DataFrame({
             't_ms': [0, 1000],
             'frame_number': [0, 30],
-            'crop_x': [100.7, 110.3],
-            'crop_y': [50.2, 55.8],
-            'crop_w': [1000.9, 1020.1],
-            'crop_h': [600.4, 610.6]
+            'crop_x': [0, 5000],
+            'crop_y': [0, 3000],
+            'crop_w': [10, 8000],
+            'crop_h': [10, 5000]
         })
         
-        result = generate_sendcmd_filter(fractional_coords, fps=30.0)
+        result = generate_smooth_ffmpeg_filter(extreme_coords, fps=30.0)
+        
+        # Should handle extreme values
+        self.assertTrue(result.startswith("sendcmd=c='"))
         lines = result.replace("sendcmd=c='", "").replace("'", "").split('\n')
         
         for line in lines:
             if line.strip():
                 parts = line.split()
+                width = int(parts[3])
+                height = int(parts[5])
+                
+                # Dimensions should still be even
+                self.assertEqual(width % 2, 0)
+                self.assertEqual(height % 2, 0)
+    
+    def test_sendcmd_fractional_coordinates(self):
+        """Test sendcmd with fractional coordinates (should be converted to integers)"""
+        fractional_coords = pd.DataFrame({
+            't_ms': [0.0, 1000.5],
+            'frame_number': [0, 30],
+            'crop_x': [100.7, 110.3],
+            'crop_y': [50.2, 55.8],
+            'crop_w': [1000.9, 1020.1],
+            'crop_h': [600.6, 610.4]
+        })
+        
+        result = generate_smooth_ffmpeg_filter(fractional_coords, fps=30.0)
+        
+        lines = result.replace("sendcmd=c='", "").replace("'", "").split('\n')
+        
+        for line in lines:
+            if line.strip():
+                # Remove semicolon at the end before parsing
+                parts = line.rstrip(';').split()
+                
                 # All coordinate values should be integers
-                for i in [3, 5, 7, 9]:  # w, h, x, y positions
-                    self.assertTrue(parts[i].lstrip('-').isdigit())
+                width = int(parts[3])
+                height = int(parts[5])
+                x = int(parts[7])
+                y = int(parts[9])
+                
+                # Should be valid integers
+                self.assertIsInstance(width, int)
+                self.assertIsInstance(height, int)
+                self.assertIsInstance(x, int)
+                self.assertIsInstance(y, int)
 
 
 if __name__ == '__main__':
