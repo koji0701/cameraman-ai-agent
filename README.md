@@ -59,9 +59,9 @@ graph TD
     style I fill:#059669,stroke:#047857,stroke-width:3px,color:#ffffff
     
     %% Subgraph styling with modern gradients
-    style AI fill:#fff7ed,stroke:#f97316,stroke-width:2px,stroke-dasharray: 5 5
-    style MATH fill:#faf5ff,stroke:#8b5cf6,stroke-width:2px,stroke-dasharray: 5 5
-    style OPENCV fill:#ecfeff,stroke:#06b6d4,stroke-width:2px,stroke-dasharray: 5 5
+    style AI fill:#fff7ed,stroke:#f97316,stroke-width:2px,stroke-dasharray: 5 5,color:#1f2937
+    style MATH fill:#faf5ff,stroke:#8b5cf6,stroke-width:2px,stroke-dasharray: 5 5,color:#1f2937
+    style OPENCV fill:#ecfeff,stroke:#06b6d4,stroke-width:2px,stroke-dasharray: 5 5,color:#1f2937
     
     %% Connection styling
     linkStyle default stroke:#64748b,stroke-width:2px
