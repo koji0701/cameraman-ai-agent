@@ -31,26 +31,48 @@ graph TD
     G --> H[Hardware-Accelerated Encoding]
     H --> I[Optimized Output Video]
     
-    subgraph "AI Analysis Pipeline"
+    subgraph AI ["🤖 AI Analysis Pipeline"]
         B
         C
     end
     
-    subgraph "Mathematical Processing"
+    subgraph MATH ["📊 Mathematical Processing"]
         D
         E
     end
     
-    subgraph "OpenCV Video Pipeline"
+    subgraph OPENCV ["⚡ OpenCV Video Pipeline"]
         F
         G
         H
     end
     
-    style A fill:#e1f5fe
-    style I fill:#e8f5e8
-    style B fill:#fff3e0
-    style F fill:#fce4ec
+    %% Modern color scheme with gradients and contemporary palette
+    style A fill:#1e3a8a,stroke:#1e40af,stroke-width:3px,color:#ffffff
+    style B fill:#f97316,stroke:#ea580c,stroke-width:2px,color:#ffffff
+    style C fill:#fb923c,stroke:#f97316,stroke-width:2px,color:#ffffff
+    style D fill:#8b5cf6,stroke:#7c3aed,stroke-width:2px,color:#ffffff
+    style E fill:#a855f7,stroke:#9333ea,stroke-width:2px,color:#ffffff
+    style F fill:#06b6d4,stroke:#0891b2,stroke-width:2px,color:#ffffff
+    style G fill:#0ea5e9,stroke:#0284c7,stroke-width:2px,color:#ffffff
+    style H fill:#0284c7,stroke:#0369a1,stroke-width:2px,color:#ffffff
+    style I fill:#059669,stroke:#047857,stroke-width:3px,color:#ffffff
+    
+    %% Subgraph styling with modern gradients
+    style AI fill:#fff7ed,stroke:#f97316,stroke-width:2px,stroke-dasharray: 5 5
+    style MATH fill:#faf5ff,stroke:#8b5cf6,stroke-width:2px,stroke-dasharray: 5 5
+    style OPENCV fill:#ecfeff,stroke:#06b6d4,stroke-width:2px,stroke-dasharray: 5 5
+    
+    %% Connection styling
+    linkStyle default stroke:#64748b,stroke-width:2px
+    linkStyle 0 stroke:#f97316,stroke-width:3px
+    linkStyle 1 stroke:#fb923c,stroke-width:2px
+    linkStyle 2 stroke:#8b5cf6,stroke-width:2px
+    linkStyle 3 stroke:#a855f7,stroke-width:2px
+    linkStyle 4 stroke:#06b6d4,stroke-width:2px
+    linkStyle 5 stroke:#0ea5e9,stroke-width:2px
+    linkStyle 6 stroke:#0284c7,stroke-width:2px
+    linkStyle 7 stroke:#059669,stroke-width:3px
 ```
 
 ## 🚀 Quick Start
@@ -330,13 +352,6 @@ pytest tests/
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-
-## 📞 Support
-
-- 🐛 **Bug Reports**: [GitHub Issues](https://github.com/yourusername/ai-cameraman/issues)
-- 💡 **Feature Requests**: [GitHub Discussions](https://github.com/yourusername/ai-cameraman/discussions)
-- 📧 **Email**: support@ai-cameraman.dev
-- 📖 **Documentation**: [Wiki](https://github.com/yourusername/ai-cameraman/wiki)
 
 ---
 
