@@ -10,7 +10,7 @@ AI Cameraman automatically analyzes video footage (optimized for sports like wat
 
 ## 🎬 Demo
 
-
+https://github.com/user-attachments/assets/ad4bb8cf-fa68-4931-b6da-8e956a2428d2
 
 *Watch AI Cameraman in action: automatically zooming and panning the camera in a water polo game to focus on the main action*
 
