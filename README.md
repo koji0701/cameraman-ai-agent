@@ -8,6 +8,12 @@
 
 AI Cameraman automatically analyzes video footage (optimized for sports like water polo) and creates dynamically cropped videos that intelligently follow the action. By combining Google's Gemini 2.5 Flash for scene understanding with high-performance OpenCV processing, it delivers professional-quality results with up to **70% file size reduction** while maintaining focus on the most important parts of the action.
 
+## 🎬 Demo
+
+https://github.com/user-attachments/assets/demo.mp4
+
+*Watch AI Cameraman in action: automatically tracking and cropping a water polo game to focus on the key plays*
+
 ## 🌟 Key Features
 
 - **🤖 AI-Powered Analysis**: Uses Gemini 2.5 Pro to identify and track action areas in video footage
