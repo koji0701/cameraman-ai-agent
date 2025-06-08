@@ -222,9 +222,7 @@ success = pipeline.process_video_complete(
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `GOOGLE_API_KEY` | Gemini API key (required) | None |
-| `OPENCV_THREADS` | Number of OpenCV processing threads | Auto-detect |
-| `MEMORY_LIMIT_MB` | Maximum memory usage | 1000 |
-| `ENABLE_GPU` | Enable GPU acceleration | True |
+
 
 ## 📁 Project Structure
 
@@ -276,13 +274,14 @@ python test_opencv_dynamic_cropping.py
 ## 🎮 Use Cases
 
 ### Sports Analysis
+- **Generalized**: Zooms in on the main action (ball, transitions, the goal when scoring, etc)
 - **Water Polo**: Track ball and player movements
 - **Basketball**: Follow court action and key plays  
 - **Soccer**: Focus on ball possession and scoring opportunities
 
 ### Content Creation
+- **Film Games**: Easily film sports games by propping your camera - no manual camerawork required
 - **Highlight Reels**: Automatically create focused highlight videos
-- **Social Media**: Generate mobile-optimized content from wide shots
 - **Training Analysis**: Create focused clips for coaching review
 
 ### Surveillance & Security
@@ -290,33 +289,6 @@ python test_opencv_dynamic_cropping.py
 - **Incident Analysis**: Zoom in on specific areas during events
 - **Area Monitoring**: Focus on high-activity zones
 
-## 🔧 Advanced Features
-
-### Custom Action Detection
-
-```python
-# Define custom detection parameters
-pipeline.configure_detection(
-    focus_objects=["ball", "players"],
-    ignore_areas=[(0, 0, 100, 100)],  # Ignore corners
-    minimum_action_size=50,           # Minimum bounding box size
-    tracking_smoothness=0.8           # Higher = smoother tracking
-)
-```
-
-### Multi-Camera Processing
-
-```python
-# Process multiple camera angles
-from src.video_processing.multi_camera import MultiCameraProcessor
-
-processor = MultiCameraProcessor()
-processor.sync_and_process([
-    "camera1.mp4",
-    "camera2.mp4", 
-    "camera3.mp4"
-], output_dir="outputs/multi_cam/")
-```
 
 ## 📈 Storage Optimization
 
