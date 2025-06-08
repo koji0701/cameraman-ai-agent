@@ -6,7 +6,7 @@
 [![OpenCV](https://img.shields.io/badge/OpenCV-4.11+-green.svg)](https://opencv.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-AI Cameraman automatically analyzes video footage (optimized for sports like water polo) and creates dynamically cropped videos that intelligently follow the action. By combining Google's Gemini 2.5 Pro for scene understanding with high-performance OpenCV processing, it delivers professional-quality results with up to **70% file size reduction** while maintaining focus on the most important parts of the action.
+AI Cameraman automatically analyzes video footage (optimized for sports like water polo) and creates dynamically cropped videos that intelligently follow the action. By combining Google's Gemini 2.5 Flash for scene understanding with high-performance OpenCV processing, it delivers professional-quality results with up to **70% file size reduction** while maintaining focus on the most important parts of the action.
 
 ## 🌟 Key Features
 
@@ -22,7 +22,7 @@ AI Cameraman automatically analyzes video footage (optimized for sports like wat
 
 ```mermaid
 graph TD
-    A[Input Video MP4] --> B[Gemini 2.5 Pro Analysis]
+    A[Input Video MP4] --> B[Gemini 2.5 Flash Analysis]
     B --> C[Action Coordinates JSON]
     C --> D[Kalman Smoothing Filter]
     D --> E[Cubic Spline Interpolation]
