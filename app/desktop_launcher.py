@@ -57,9 +57,16 @@ def launch_electron_gui():
 
 def run_cli_processing(input_video: str, output_video: str, **options):
     """Run video processing via CLI interface"""
-    print("🎬 AI Cameraman CLI Processing")
+    print("🎬 AI Cameraman Enhanced CLI Processing")
     print(f"   Input: {input_video}")
     print(f"   Output: {output_video}")
+    
+    # Display processing options
+    print(f"   Quality: {options.get('quality_preset', 'medium')}")
+    print(f"   Codec: {options.get('video_codec', 'h264_videotoolbox')}")
+    print(f"   Streaming: {'Disabled' if not options.get('use_streaming', True) else 'Enabled'}")
+    print(f"   Bitrate: {options.get('bitrate', '15M')}")
+    print(f"   Stabilization: {'Enabled' if options.get('enable_stabilization', False) else 'Disabled'}")
     
     # Validate input file
     file_manager = FileManager()
@@ -67,39 +74,107 @@ def run_cli_processing(input_video: str, output_video: str, **options):
         print(f"❌ Invalid video file: {input_video}")
         return False
     
-    # Import and use the existing pipeline
-    from src.video_processing.pipeline_integration import AICameramanPipeline
+    # Check if we should use the direct pipeline (for full compatibility)
+    processor_type = options.get('processor_type', 'opencv')
+    use_direct_pipeline = True  # Use direct pipeline for full feature support
     
-    pipeline = AICameramanPipeline(processor_type="opencv", verbose=True)
+    if use_direct_pipeline:
+        print("   Using direct pipeline for maximum compatibility...")
+        return run_direct_pipeline_processing(input_video, output_video, **options)
+    else:
+        # Use integrated pipeline (for future desktop GUI compatibility)
+        from src.video_processing.pipeline_integration import AICameramanPipeline
+        
+        pipeline = AICameramanPipeline(processor_type=processor_type, verbose=True)
+        
+        # Create progress callback for CLI
+        def progress_callback(percentage: float, stage: str, details: str = ""):
+            progress_bar = "█" * int(percentage // 5) + "░" * (20 - int(percentage // 5))
+            print(f"   [{progress_bar}] {percentage:5.1f}% - {stage}: {details}")
+        
+        try:
+            success = pipeline.process_video_complete(
+                input_video_path=input_video,
+                output_video_path=output_video,
+                progress_callback=progress_callback,
+                **options
+            )
+            
+            if success:
+                # Show file statistics
+                file_manager = FileManager()
+                stats = file_manager.get_file_stats(input_video, output_video)
+                print("\n✅ Processing completed successfully!")
+                print(f"   Input size: {stats['input_size_mb']} MB")
+                print(f"   Output size: {stats['output_size_mb']} MB")
+                print(f"   Compression: {stats['compression_ratio']}%")
+                print(f"   Space saved: {stats['space_saved_mb']} MB")
+            else:
+                print("\n❌ Processing failed!")
+            
+            return success
+            
+        except Exception as e:
+            print(f"\n❌ Processing error: {e}")
+            return False
+
+
+def run_direct_pipeline_processing(input_video: str, output_video: str, **options):
+    """Run video processing using the direct pipeline (like your current workflow)"""
     
-    # Create progress callback for CLI
-    def progress_callback(percentage: float, stage: str, details: str = ""):
-        progress_bar = "█" * int(percentage // 5) + "░" * (20 - int(percentage // 5))
-        print(f"   [{progress_bar}] {percentage:5.1f}% - {stage}: {details}")
+    # Import the direct pipeline functions
+    sys.path.append(str(project_root / "pipelines"))
     
     try:
-        success = pipeline.process_video_complete(
+        from render_video import process_and_render_complete
+        
+        # Create progress callback for CLI
+        def progress_callback(percentage: float, stage: str, details: str = ""):
+            progress_bar = "█" * int(percentage // 5) + "░" * (20 - int(percentage // 5))
+            print(f"   [{progress_bar}] {percentage:5.1f}% - {stage}: {details}")
+        
+        # Map CLI options to render_video parameters
+        render_kwargs = {
+            'quality_preset': options.get('quality_preset', 'medium'),
+            'video_codec': options.get('video_codec', 'h264_videotoolbox'),
+            'bitrate': options.get('bitrate', '15M'),
+            'enable_stabilization': options.get('enable_stabilization', False),
+            'color_correction': options.get('color_correction', False),
+            'use_streaming': options.get('use_streaming', True),
+            'save_intermediate_files': True,
+            'verbose': True
+        }
+        
+        print(f"   🚀 Starting direct pipeline processing...")
+        print(f"   📋 Processing options: {render_kwargs}")
+        
+        # Call the direct pipeline function
+        success = process_and_render_complete(
             input_video_path=input_video,
             output_video_path=output_video,
-            progress_callback=progress_callback,
-            **options
+            padding_factor=options.get('padding_factor', 1.1),
+            smoothing_strength=options.get('smoothing_strength', 'balanced'),
+            interpolation_method=options.get('interpolation_method', 'cubic'),
+            **render_kwargs
         )
         
         if success:
             # Show file statistics
+            file_manager = FileManager()
             stats = file_manager.get_file_stats(input_video, output_video)
-            print("\n✅ Processing completed successfully!")
+            print("\n✅ Direct pipeline processing completed successfully!")
             print(f"   Input size: {stats['input_size_mb']} MB")
-            print(f"   Output size: {stats['output_size_mb']} MB")
+            print(f"   Output size: {stats['output_size_mb']} MB") 
             print(f"   Compression: {stats['compression_ratio']}%")
             print(f"   Space saved: {stats['space_saved_mb']} MB")
         else:
-            print("\n❌ Processing failed!")
+            print("\n❌ Direct pipeline processing failed!")
         
         return success
         
     except Exception as e:
-        print(f"\n❌ Processing error: {e}")
+        print(f"\n❌ Direct pipeline processing error: {e}")
+        print("   This may indicate missing dependencies or pipeline issues")
         return False
 
 
@@ -180,8 +255,17 @@ def main():
 Examples:
   %(prog)s gui                     # Launch desktop GUI
   %(prog)s bridge                  # Start Python bridge for Electron
-  %(prog)s cli input.mp4 output.mp4  # Process video via CLI
+  %(prog)s cli input.mp4 output.mp4  # Basic video processing
+  %(prog)s cli input.mp4 output.mp4 --quality medium --codec h264_videotoolbox --disable-streaming
   %(prog)s status                  # Show system status
+
+Enhanced CLI Options:
+  --quality {low,medium,high,ultra}    Video quality preset
+  --codec CODEC                        Video codec (h264_videotoolbox, libx264, etc.)
+  --disable-streaming                  Use file-based processing instead of streaming
+  --bitrate RATE                       Video bitrate (e.g., 15M, 20M)
+  --enable-stabilization               Enable video stabilization
+  --color-correction                   Enable color correction
         """
     )
     
@@ -224,6 +308,44 @@ Examples:
         help='Video processor type (default: opencv)'
     )
     
+    # Video encoding options (matching existing pipeline)
+    parser.add_argument(
+        '--quality',
+        choices=['low', 'medium', 'high', 'ultra'],
+        default='medium',
+        help='Video quality preset (default: medium)'
+    )
+    
+    parser.add_argument(
+        '--codec',
+        default='h264_videotoolbox',
+        help='Video codec (default: h264_videotoolbox)'
+    )
+    
+    parser.add_argument(
+        '--disable-streaming',
+        action='store_true',
+        help='Disable streaming mode (use file-based processing)'
+    )
+    
+    parser.add_argument(
+        '--bitrate',
+        default='15M',
+        help='Video bitrate (default: 15M)'
+    )
+    
+    parser.add_argument(
+        '--enable-stabilization',
+        action='store_true',
+        help='Enable video stabilization'
+    )
+    
+    parser.add_argument(
+        '--color-correction',
+        action='store_true',
+        help='Enable color correction'
+    )
+    
     args = parser.parse_args()
     
     if args.mode == 'gui':
@@ -247,7 +369,14 @@ Examples:
             args.output_video,
             padding_factor=args.padding,
             smoothing_strength=args.smoothing,
-            processor_type=args.processor
+            processor_type=args.processor,
+            # Video encoding options
+            quality_preset=args.quality,
+            video_codec=args.codec,
+            use_streaming=not args.disable_streaming,
+            bitrate=args.bitrate,
+            enable_stabilization=args.enable_stabilization,
+            color_correction=args.color_correction
         )
         sys.exit(0 if success else 1)
 
