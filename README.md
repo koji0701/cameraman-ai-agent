@@ -21,9 +21,12 @@ https://github.com/user-attachments/assets/ad4bb8cf-fa68-4931-b6da-8e956a2428d2
 
 ## 💻 Desktop GUI
 
-<img width="1438" alt="Screenshot 2025-06-09 at 1 37 43 AM" src="https://github.com/user-attachments/assets/86c6795a-aa5b-4ca3-bc7b-60ce8d87b1fb" />
-<img width="1440" alt="Screenshot 2025-06-09 at 1 34 03 AM" src="https://github.com/user-attachments/assets/77c2c2b1-64c8-4061-b9d5-f0657ed9ae07" />
-
+<table>
+<tr>
+<td><img width="600" alt="Screenshot 2025-06-09 at 1 37 43 AM" src="https://github.com/user-attachments/assets/86c6795a-aa5b-4ca3-bc7b-60ce8d87b1fb" /></td>
+<td><img width="600" alt="Screenshot 2025-06-09 at 1 34 03 AM" src="https://github.com/user-attachments/assets/77c2c2b1-64c8-4061-b9d5-f0657ed9ae07" /></td>
+</tr>
+</table>
 
 ## 🌟 Key Features
 
