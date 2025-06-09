@@ -17,12 +17,12 @@ sys.path.append(str(Path(__file__).parent.parent.parent / "pipelines"))
 try:
     from genai_client import process_video_complete_pipeline, save_complete_results
     from kalman_smoother import apply_kalman_smoothing
-    from normalize_coordinates import normalize_action_coordinates
+    from normalize_coordinates import normalize_bounding_boxes_to_video_resolution
 except ImportError as e:
     print(f"⚠️ Could not import existing pipeline modules: {e}")
     process_video_complete_pipeline = None
     apply_kalman_smoothing = None
-    normalize_action_coordinates = None
+    normalize_bounding_boxes_to_video_resolution = None
 
 from .opencv_processor import OpenCVCameraman
 from .ffmpeg_processor import FFmpegProcessor
