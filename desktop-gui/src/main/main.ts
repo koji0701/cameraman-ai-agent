@@ -31,10 +31,44 @@ let processingStatus = {
   isProcessing: false,
   progress: 0,
   stage: '',
-  details: ''
+  details: '',
 };
 
 let mainWindow: BrowserWindow | null = null;
+
+// API Key management functions
+const getConfigPath = () => {
+  const userDataPath = app.getPath('userData');
+  return path.join(userDataPath, 'config.json');
+};
+
+const loadConfig = () => {
+  try {
+    const configPath = getConfigPath();
+    if (fs.existsSync(configPath)) {
+      const configData = fs.readFileSync(configPath, 'utf8');
+      return JSON.parse(configData);
+    }
+  } catch (error) {
+    console.error('Error loading config:', error);
+  }
+  return {};
+};
+
+const saveConfig = (config: any) => {
+  try {
+    const configPath = getConfigPath();
+    const configDir = path.dirname(configPath);
+    if (!fs.existsSync(configDir)) {
+      fs.mkdirSync(configDir, { recursive: true });
+    }
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    return true;
+  } catch (error) {
+    console.error('Error saving config:', error);
+    return false;
+  }
+};
 
 // Original IPC example handler
 ipcMain.on('ipc-example', async (event, arg) => {
@@ -50,14 +84,14 @@ ipcMain.handle('select-video-file', async () => {
     filters: [
       {
         name: 'Video Files',
-        extensions: ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'm4v']
+        extensions: ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'm4v'],
       },
       {
         name: 'All Files',
-        extensions: ['*']
-      }
+        extensions: ['*'],
+      },
     ],
-    properties: ['openFile']
+    properties: ['openFile'],
   });
 
   if (result.canceled) {
@@ -68,133 +102,163 @@ ipcMain.handle('select-video-file', async () => {
 });
 
 // Video processing handler
-ipcMain.handle('process-video', async (event, inputPath: string, outputPath: string, options: any) => {
-  if (processingStatus.isProcessing) {
-    throw new Error('A video is already being processed');
-  }
-
-  try {
-    // Reset processing status
-    processingStatus = {
-      isProcessing: true,
-      progress: 0,
-      stage: 'Initializing',
-      details: 'Starting Python backend...'
-    };
-
-    // Get the path to the Python backend launcher
-    const appPath = app.getAppPath();
-    const pythonLauncherPath = app.isPackaged 
-      ? path.join(process.resourcesPath, '..', '..', 'app', 'desktop_launcher.py')
-      : path.join(appPath, '..', 'app', 'desktop_launcher.py');
-
-    console.log('Python launcher path:', pythonLauncherPath);
-    console.log('App path:', appPath);
-    console.log('Is packaged:', app.isPackaged);
-
-    // Check if the launcher exists
-    if (!fs.existsSync(pythonLauncherPath)) {
-      throw new Error(`Python launcher not found at: ${pythonLauncherPath}`);
+ipcMain.handle(
+  'process-video',
+  async (event, inputPath: string, outputPath: string, options: any) => {
+    if (processingStatus.isProcessing) {
+      throw new Error('A video is already being processed');
     }
 
-    // Build command arguments for OpenCV-only processing
-    const args = [
-      pythonLauncherPath,
-      'cli',
-      inputPath,
-      outputPath,
-      '--quality', options.quality || 'medium',
-      '--disable-streaming' // Always use OpenCV processing
-    ];
+    try {
+      // Reset processing status
+      processingStatus = {
+        isProcessing: true,
+        progress: 0,
+        stage: 'Initializing',
+        details: 'Starting Python backend...',
+      };
 
-    console.log('Executing command:', 'python3', args);
+      // Get the path to the Python backend launcher
+      const appPath = app.getAppPath();
+      const pythonLauncherPath = app.isPackaged
+        ? path.join(
+            process.resourcesPath,
+            '..',
+            '..',
+            'app',
+            'desktop_launcher.py',
+          )
+        : path.join(appPath, '..', 'app', 'desktop_launcher.py');
 
-    // Spawn the Python process
-    pythonProcess = spawn('python3', args, {
-      cwd: path.dirname(pythonLauncherPath),
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
+      console.log('Python launcher path:', pythonLauncherPath);
+      console.log('App path:', appPath);
+      console.log('Is packaged:', app.isPackaged);
 
-    // Handle process output
-    pythonProcess.stdout?.on('data', (data) => {
-      const output = data.toString();
-      console.log('Python stdout:', output);
-      
-      // Parse progress information if available
-      // Look for progress indicators in the output
-      const progressMatch = output.match(/(\d+\.?\d*)%/);
-      if (progressMatch) {
-        processingStatus.progress = parseFloat(progressMatch[1]);
+      // Check if the launcher exists
+      if (!fs.existsSync(pythonLauncherPath)) {
+        throw new Error(`Python launcher not found at: ${pythonLauncherPath}`);
       }
-      
-      // Update stage based on output
-      if (output.includes('Starting')) {
-        processingStatus.stage = 'Starting';
-      } else if (output.includes('Analyzing')) {
-        processingStatus.stage = 'Analyzing';
-      } else if (output.includes('Processing')) {
-        processingStatus.stage = 'Processing';
-      } else if (output.includes('Rendering')) {
-        processingStatus.stage = 'Rendering';
-      } else if (output.includes('Finalizing')) {
-        processingStatus.stage = 'Finalizing';
+
+      // Build command arguments for OpenCV-only processing
+      const args = [
+        pythonLauncherPath,
+        'cli',
+        inputPath,
+        outputPath,
+        '--quality',
+        options.quality || 'medium',
+        '--disable-streaming', // Always use OpenCV processing
+      ];
+
+      console.log('Executing command:', 'python3', args);
+
+      // Get the stored API key and set environment variable
+      const config = loadConfig();
+      const { geminiApiKey } = config;
+
+      if (!geminiApiKey) {
+        throw new Error(
+          'Gemini API key not configured. Please set your API key in the settings.',
+        );
       }
-      
-      processingStatus.details = output.trim().split('\n').pop() || '';
-      
-      // Send progress update to renderer
-      mainWindow?.webContents.send('processing-progress', processingStatus);
-    });
 
-    pythonProcess.stderr?.on('data', (data) => {
-      const error = data.toString();
-      console.error('Python stderr:', error);
-      processingStatus.details = `Error: ${error.trim()}`;
-      mainWindow?.webContents.send('processing-progress', processingStatus);
-    });
+      const env = { ...process.env };
+      env.GOOGLE_API_KEY = geminiApiKey;
 
-    // Handle process completion
-    return new Promise((resolve, reject) => {
-      pythonProcess!.on('close', (code) => {
-        console.log(`Python process exited with code ${code}`);
-        
-        processingStatus.isProcessing = false;
-        
-        if (code === 0) {
-          processingStatus.progress = 100;
-          processingStatus.stage = 'Completed';
-          processingStatus.details = 'Video processing completed successfully!';
-          mainWindow?.webContents.send('processing-progress', processingStatus);
-          resolve({ success: true, outputPath });
-        } else {
-          processingStatus.stage = 'Failed';
-          processingStatus.details = `Process failed with exit code ${code}`;
-          mainWindow?.webContents.send('processing-progress', processingStatus);
-          reject(new Error(`Python process failed with exit code ${code}`));
+      // Spawn the Python process
+      pythonProcess = spawn('python3', args, {
+        cwd: path.dirname(pythonLauncherPath),
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env,
+      });
+
+      // Handle process output
+      pythonProcess.stdout?.on('data', (data) => {
+        const output = data.toString();
+        console.log('Python stdout:', output);
+
+        // Parse progress information if available
+        // Look for progress indicators in the output
+        const progressMatch = output.match(/(\d+\.?\d*)%/);
+        if (progressMatch) {
+          processingStatus.progress = parseFloat(progressMatch[1]);
         }
-        
-        pythonProcess = null;
-      });
 
-      pythonProcess!.on('error', (err) => {
-        console.error('Python process error:', err);
-        processingStatus.isProcessing = false;
-        processingStatus.stage = 'Failed';
-        processingStatus.details = `Process error: ${err.message}`;
+        // Update stage based on output
+        if (output.includes('Starting')) {
+          processingStatus.stage = 'Starting';
+        } else if (output.includes('Analyzing')) {
+          processingStatus.stage = 'Analyzing';
+        } else if (output.includes('Processing')) {
+          processingStatus.stage = 'Processing';
+        } else if (output.includes('Rendering')) {
+          processingStatus.stage = 'Rendering';
+        } else if (output.includes('Finalizing')) {
+          processingStatus.stage = 'Finalizing';
+        }
+
+        processingStatus.details = output.trim().split('\n').pop() || '';
+
+        // Send progress update to renderer
         mainWindow?.webContents.send('processing-progress', processingStatus);
-        reject(err);
-        pythonProcess = null;
       });
-    });
 
-  } catch (error) {
-    processingStatus.isProcessing = false;
-    processingStatus.stage = 'Failed';
-    processingStatus.details = `Error: ${error}`;
-    console.error('Process video error:', error);
-    throw error;
-  }
-});
+      pythonProcess.stderr?.on('data', (data) => {
+        const error = data.toString();
+        console.error('Python stderr:', error);
+        processingStatus.details = `Error: ${error.trim()}`;
+        mainWindow?.webContents.send('processing-progress', processingStatus);
+      });
+
+      // Handle process completion
+      return new Promise((resolve, reject) => {
+        pythonProcess!.on('close', (code) => {
+          console.log(`Python process exited with code ${code}`);
+
+          processingStatus.isProcessing = false;
+
+          if (code === 0) {
+            processingStatus.progress = 100;
+            processingStatus.stage = 'Completed';
+            processingStatus.details =
+              'Video processing completed successfully!';
+            mainWindow?.webContents.send(
+              'processing-progress',
+              processingStatus,
+            );
+            resolve({ success: true, outputPath });
+          } else {
+            processingStatus.stage = 'Failed';
+            processingStatus.details = `Process failed with exit code ${code}`;
+            mainWindow?.webContents.send(
+              'processing-progress',
+              processingStatus,
+            );
+            reject(new Error(`Python process failed with exit code ${code}`));
+          }
+
+          pythonProcess = null;
+        });
+
+        pythonProcess!.on('error', (err) => {
+          console.error('Python process error:', err);
+          processingStatus.isProcessing = false;
+          processingStatus.stage = 'Failed';
+          processingStatus.details = `Process error: ${err.message}`;
+          mainWindow?.webContents.send('processing-progress', processingStatus);
+          reject(err);
+          pythonProcess = null;
+        });
+      });
+    } catch (error) {
+      processingStatus.isProcessing = false;
+      processingStatus.stage = 'Failed';
+      processingStatus.details = `Error: ${error}`;
+      console.error('Process video error:', error);
+      throw error;
+    }
+  },
+);
 
 // Processing status handler
 ipcMain.handle('get-processing-status', async () => {
@@ -224,17 +288,41 @@ ipcMain.handle('get-app-version', async () => {
   return app.getVersion();
 });
 
-ipcMain.handle('show-error-dialog', async (event, title: string, content: string) => {
-  return dialog.showErrorBox(title, content);
+ipcMain.handle(
+  'show-error-dialog',
+  async (event, title: string, content: string) => {
+    return dialog.showErrorBox(title, content);
+  },
+);
+
+ipcMain.handle(
+  'show-info-dialog',
+  async (event, title: string, content: string) => {
+    return dialog.showMessageBox(mainWindow!, {
+      type: 'info',
+      title,
+      message: content,
+      buttons: ['OK'],
+    });
+  },
+);
+
+// API Key management handlers
+ipcMain.handle('get-api-key', async () => {
+  const config = loadConfig();
+  return config.geminiApiKey || null;
 });
 
-ipcMain.handle('show-info-dialog', async (event, title: string, content: string) => {
-  return dialog.showMessageBox(mainWindow!, {
-    type: 'info',
-    title,
-    message: content,
-    buttons: ['OK']
-  });
+ipcMain.handle('save-api-key', async (event, apiKey: string) => {
+  const config = loadConfig();
+  config.geminiApiKey = apiKey;
+  return saveConfig(config);
+});
+
+ipcMain.handle('delete-api-key', async () => {
+  const config = loadConfig();
+  delete config.geminiApiKey;
+  return saveConfig(config);
 });
 
 if (process.env.NODE_ENV === 'production') {

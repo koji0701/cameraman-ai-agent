@@ -5,7 +5,7 @@
 videos/
 outputs/
 pipelines/__pycache__/
-
+tests/__pycache__/
 
 ########################
 # Desktop GUI
@@ -40,3 +40,7 @@ desktop-gui/npm-debug.log.*
 desktop-gui/*.css.d.ts
 desktop-gui/*.sass.d.ts
 desktop-gui/*.scss.d.ts
+
+
+#python-backend
+python-backend/__pycache__/
