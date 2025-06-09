@@ -113,7 +113,10 @@ const configuration: webpack.Configuration = {
       },
       {
         test: /\.css$/,
-        include: [webpackPaths.srcRendererPath],
+        include: [
+          webpackPaths.srcRendererPath,
+          path.join(webpackPaths.srcPath, 'styles'),
+        ],
         use: ['style-loader', 'css-loader', 'postcss-loader'],
       }
     
