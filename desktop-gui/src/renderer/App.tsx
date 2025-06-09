@@ -215,12 +215,6 @@ function AICameramanMain() {
       />
       
       <main className="container mx-auto px-6 py-8 space-y-8 max-w-6xl">
-        {/* Tailwind Test Component */}
-        <div className="bg-gray-500 text-center text-white p-4 rounded-lg mb-8">
-          <h1 className="text-2xl font-bold">
-            Hi Tailwind has been integrated.
-          </h1>
-        </div>
         
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           {/* Left Column */}
