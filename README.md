@@ -9,7 +9,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8+-3178C6.svg)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-AI Cameraman automatically analyzes video footage (optimized for sports like water polo) and creates dynamically cropped videos that intelligently follow the action. By combining Google's Gemini 2.5 Flash for scene understanding with high-performance OpenCV processing, it delivers professional-quality results with up to **70% file size reduction** while maintaining focus on the most important parts of the action.
+AI Cameraman automatically analyzes video footage and creates dynamically cropped videos that intelligently follow the action. By combining Google's Gemini 2.5 Flash for scene understanding with high-performance OpenCV processing, it delivers professional-quality results that capture the main action. 
 
 Available as both a **desktop GUI application** and **command-line interface** for maximum flexibility and ease of use.
 
@@ -18,6 +18,12 @@ Available as both a **desktop GUI application** and **command-line interface** f
 https://github.com/user-attachments/assets/ad4bb8cf-fa68-4931-b6da-8e956a2428d2
 
 *Watch AI Cameraman in action: automatically zooming and panning the camera in a water polo game to focus on the main action during a transition*
+
+## 💻 Desktop GUI
+
+<img width="1438" alt="Screenshot 2025-06-09 at 1 37 43 AM" src="https://github.com/user-attachments/assets/86c6795a-aa5b-4ca3-bc7b-60ce8d87b1fb" />
+<img width="1440" alt="Screenshot 2025-06-09 at 1 34 03 AM" src="https://github.com/user-attachments/assets/77c2c2b1-64c8-4061-b9d5-f0657ed9ae07" />
+
 
 ## 🌟 Key Features
 
