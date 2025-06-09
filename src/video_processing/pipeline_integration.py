@@ -50,6 +50,7 @@ class AICameramanPipeline:
                              padding_factor: float = 1.1,
                              smoothing_strength: str = 'balanced',
                              interpolation_method: str = 'cubic',
+                             progress_callback: callable = None,
                              **kwargs) -> bool:
         """
         Complete video processing pipeline using Gemini API and chosen processor
@@ -60,6 +61,7 @@ class AICameramanPipeline:
             padding_factor: Padding around detected action area
             smoothing_strength: Kalman smoothing strength
             interpolation_method: Coordinate interpolation method
+            progress_callback: Optional callback for progress updates (percentage, stage, details)
             **kwargs: Additional processing parameters
             
         Returns:
@@ -72,12 +74,19 @@ class AICameramanPipeline:
                 print(f"   Input: {input_video_path}")
                 print(f"   Output: {output_video_path}")
             
+            # Report initialization
+            if progress_callback:
+                progress_callback(5, "initializing", "Setting up AI Cameraman pipeline...")
+            
             # Step 1: Get Gemini API coordinates
             if self.verbose:
                 print("1️⃣ Extracting action coordinates using Gemini API...")
             
+            if progress_callback:
+                progress_callback(15, "analyzing_with_gemini", "Extracting action coordinates...")
+            
             gemini_results = self._extract_gemini_coordinates(
-                input_video_path, padding_factor
+                input_video_path, padding_factor, progress_callback
             )
             
             if not gemini_results:
@@ -88,20 +97,29 @@ class AICameramanPipeline:
             if self.verbose:
                 print("2️⃣ Applying Kalman smoothing to coordinates...")
             
+            if progress_callback:
+                progress_callback(40, "applying_smoothing", "Smoothing coordinate trajectories...")
+            
             smoothed_coords = self._apply_coordinate_smoothing(
                 gemini_results, smoothing_strength, interpolation_method
             )
+            
+            if progress_callback:
+                progress_callback(50, "processing_video", "Starting video processing...")
             
             # Step 3: Process video with chosen processor
             if self.verbose:
                 print(f"3️⃣ Processing video with {self.processor_type.upper()} processor...")
             
             success = self._process_video_with_processor(
-                input_video_path, output_video_path, smoothed_coords, **kwargs
+                input_video_path, output_video_path, smoothed_coords, 
+                progress_callback=progress_callback, **kwargs
             )
             
             if success and self.verbose:
                 print("✅ AI Cameraman pipeline completed successfully!")
+                if progress_callback:
+                    progress_callback(100, "completed", "Processing completed successfully!")
             
             return success
             
@@ -109,7 +127,7 @@ class AICameramanPipeline:
             print(f"❌ Pipeline error: {e}")
             return False
     
-    def _extract_gemini_coordinates(self, video_path: str, padding_factor: float) -> Optional[List[Dict]]:
+    def _extract_gemini_coordinates(self, video_path: str, padding_factor: float, progress_callback: callable = None) -> Optional[List[Dict]]:
         """Extract action coordinates using existing Gemini API integration"""
         
         if process_video_complete_pipeline is None:
@@ -239,6 +257,7 @@ class AICameramanPipeline:
                                     input_path: str,
                                     output_path: str,
                                     coordinates: List[Dict],
+                                    progress_callback: callable = None,
                                     **kwargs) -> bool:
         """Process video using the selected processor"""
         

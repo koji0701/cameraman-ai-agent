@@ -5,3 +5,38 @@
 videos/
 outputs/
 pipelines/__pycache__/
+
+
+########################
+# Desktop GUI
+########################
+
+# Logs
+desktop-gui/logs
+desktop-gui/*.log
+
+# Runtime data
+desktop-gui/pids
+desktop-gui/*.pid
+desktop-gui/*.seed
+
+# Coverage directory used by tools like istanbul
+desktop-gui/coverage
+desktop-gui/.eslintcache
+
+# Dependency directory
+# https://www.npmjs.org/doc/misc/npm-faq.html#should-i-check-my-node_modules-folder-into-git
+desktop-gui/node_modules
+
+# OSX
+desktop-gui/.DS_Store
+
+desktop-gui/release/app/dist
+desktop-gui/release/build
+desktop-gui/.erb/dll
+
+desktop-gui/.idea
+desktop-gui/npm-debug.log.*
+desktop-gui/*.css.d.ts
+desktop-gui/*.sass.d.ts
+desktop-gui/*.scss.d.ts
