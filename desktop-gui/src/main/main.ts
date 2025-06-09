@@ -150,7 +150,12 @@ ipcMain.handle(
         '--disable-streaming', // Always use OpenCV processing
       ];
 
-      console.log('Executing command:', 'python3', args);
+      // Determine the correct Python interpreter path
+      // First try to use the virtual environment's Python if available
+      const pythonExePath = path.join(path.dirname(pythonLauncherPath), '..', '.venv', 'bin', 'python3');
+      const finalPythonPath = fs.existsSync(pythonExePath) ? pythonExePath : 'python3';
+      
+      console.log('Executing command:', finalPythonPath, args);
 
       // Get the stored API key and set environment variable
       const config = loadConfig();
@@ -166,7 +171,7 @@ ipcMain.handle(
       env.GOOGLE_API_KEY = geminiApiKey;
 
       // Spawn the Python process
-      pythonProcess = spawn('python3', args, {
+      pythonProcess = spawn(finalPythonPath, args, {
         cwd: path.dirname(pythonLauncherPath),
         stdio: ['pipe', 'pipe', 'pipe'],
         env,
