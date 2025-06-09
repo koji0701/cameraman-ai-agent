@@ -74,12 +74,11 @@ const configuration: webpack.Configuration = {
               importLoaders: 1,
             },
           },
-          'sass-loader',
         ],
         include: /\.module\.s?(c|a)ss$/,
       },
       {
-        test: /\.s?css$/,
+        test: /\.s(c|a)ss$/,
         use: ['style-loader', 'css-loader', 'sass-loader'],
         exclude: /\.module\.s?(c|a)ss$/,
       },
@@ -112,6 +111,15 @@ const configuration: webpack.Configuration = {
           'file-loader',
         ],
       },
+      {
+        test: /\.css$/,
+        include: [
+          webpackPaths.srcRendererPath,
+          path.join(webpackPaths.srcPath, 'styles'),
+        ],
+        use: ['style-loader', 'css-loader', 'postcss-loader'],
+      }
+    
     ],
   },
   plugins: [

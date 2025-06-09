@@ -4,8 +4,8 @@
 
 import webpack from 'webpack';
 import TsconfigPathsPlugins from 'tsconfig-paths-webpack-plugin';
-import { dependencies as externals } from 'electron-react-boilerplate/package.json';
 import webpackPaths from './webpack.paths';
+import { dependencies as externals } from '../../release/app/package.json';
 
 const configuration: webpack.Configuration = {
   externals: [...Object.keys(externals || {})],
@@ -46,6 +46,9 @@ const configuration: webpack.Configuration = {
     modules: [webpackPaths.srcPath, 'node_modules'],
     // There is no need to add aliases here, the paths in tsconfig get mirrored
     plugins: [new TsconfigPathsPlugins()],
+    alias: {
+      '@': webpackPaths.srcPath,
+    },
   },
 
   plugins: [new webpack.EnvironmentPlugin({ NODE_ENV: 'production' })],

@@ -6,6 +6,7 @@ videos/
 outputs/
 pipelines/__pycache__/
 tests/__pycache__/
+video-processing/__pycache__/
 
 ########################
 # Desktop GUI

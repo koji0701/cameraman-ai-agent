@@ -150,7 +150,12 @@ ipcMain.handle(
         '--disable-streaming', // Always use OpenCV processing
       ];
 
-      console.log('Executing command:', 'python3', args);
+      // Determine the correct Python interpreter path
+      // First try to use the virtual environment's Python if available
+      const pythonExePath = path.join(path.dirname(pythonLauncherPath), '..', '.venv', 'bin', 'python3');
+      const finalPythonPath = fs.existsSync(pythonExePath) ? pythonExePath : 'python3';
+      
+      console.log('Executing command:', finalPythonPath, args);
 
       // Get the stored API key and set environment variable
       const config = loadConfig();
@@ -166,7 +171,7 @@ ipcMain.handle(
       env.GOOGLE_API_KEY = geminiApiKey;
 
       // Spawn the Python process
-      pythonProcess = spawn('python3', args, {
+      pythonProcess = spawn(finalPythonPath, args, {
         cwd: path.dirname(pythonLauncherPath),
         stdio: ['pipe', 'pipe', 'pipe'],
         env,
@@ -325,6 +330,8 @@ ipcMain.handle('delete-api-key', async () => {
   return saveConfig(config);
 });
 
+
+
 if (process.env.NODE_ENV === 'production') {
   const sourceMapSupport = require('source-map-support');
   sourceMapSupport.install();
@@ -367,11 +374,19 @@ const createWindow = async () => {
     show: false,
     width: 1024,
     height: 728,
+    minWidth: 800,
+    minHeight: 600,
+    transparent: true, // Make window background transparent
+    vibrancy: 'ultra-dark', // macOS vibrancy effect
+    visualEffectState: 'active', // Keep vibrancy active
+    titleBarStyle: 'hiddenInset', // Hide title bar but keep traffic lights
     icon: getAssetPath('icon.png'),
     webPreferences: {
       preload: app.isPackaged
         ? path.join(__dirname, 'preload.js')
         : path.join(__dirname, '../../.erb/dll/preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
     },
   });
 
