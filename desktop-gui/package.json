@@ -1,30 +1,29 @@
 {
-  "name": "electron-react-boilerplate",
-  "description": "A foundation for scalable desktop apps",
+  "name": "ai-cameraman-desktop",
+  "description": "AI Cameraman Desktop Application - Intelligent video reframing and enhancement",
   "keywords": [
+    "ai",
+    "cameraman", 
+    "video",
+    "processing",
+    "reframing",
     "electron",
-    "boilerplate",
     "react",
-    "typescript",
-    "ts",
-    "sass",
-    "webpack",
-    "hot",
-    "reload"
+    "typescript"
   ],
-  "homepage": "https://github.com/electron-react-boilerplate/electron-react-boilerplate#readme",
+  "homepage": "https://github.com/kojiwong/ai-cameraman#readme",
   "bugs": {
-    "url": "https://github.com/electron-react-boilerplate/electron-react-boilerplate/issues"
+    "url": "https://github.com/kojiwong/ai-cameraman/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/electron-react-boilerplate/electron-react-boilerplate.git"
+    "url": "git+https://github.com/kojiwong/ai-cameraman.git"
   },
   "license": "MIT",
   "author": {
-    "name": "Electron React Boilerplate Maintainers",
-    "email": "electronreactboilerplate@gmail.com",
-    "url": "https://electron-react-boilerplate.js.org"
+    "name": "Koji Wong",
+    "email": "koji@example.com",
+    "url": "https://github.com/kojiwong"
   },
   "contributors": [
     {
@@ -175,8 +174,8 @@
     "webpack-merge": "^6.0.1"
   },
   "build": {
-    "productName": "ElectronReact",
-    "appId": "org.erb.ElectronReact",
+    "productName": "AI Cameraman",
+    "appId": "com.kojiwong.ai-cameraman",
     "asar": true,
     "afterSign": ".erb/scripts/notarize.js",
     "asarUnpack": "**\\*.{node,dll}",

@@ -32,26 +32,37 @@ def launch_python_bridge():
 
 
 def launch_electron_gui():
-    """Launch the Electron desktop GUI (when implemented)"""
+    """Launch the Electron desktop GUI"""
     desktop_gui_path = project_root / "desktop-gui"
     
     if not desktop_gui_path.exists():
-        print("❌ Desktop GUI not yet implemented")
-        print("   The Electron GUI will be created in Phase 2")
-        print("   For now, you can use the CLI interface or Python bridge")
+        print("❌ Desktop GUI directory not found")
+        print("   Expected directory: desktop-gui")
+        return False
+    
+    # Check if package.json exists
+    package_json = desktop_gui_path / "package.json"
+    if not package_json.exists():
+        print("❌ Desktop GUI not properly set up (missing package.json)")
+        print("   Run 'npm install' in the desktop-gui directory")
         return False
     
     try:
+        print("🚀 Starting AI Cameraman Desktop GUI...")
+        print("   This will open the Electron application")
+        
         # Try to start the Electron app
         subprocess.run(["npm", "start"], cwd=desktop_gui_path, check=True)
         return True
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
         print("❌ Failed to start Electron GUI")
+        print(f"   Error: {e}")
         print("   Make sure to run 'npm install' in the desktop-gui directory")
         return False
     except FileNotFoundError:
         print("❌ Node.js/npm not found")
         print("   Please install Node.js to run the desktop GUI")
+        print("   Visit: https://nodejs.org/")
         return False
 
 
@@ -238,10 +249,16 @@ def show_status():
         package_json = desktop_gui_path / "package.json"
         if package_json.exists():
             print(f"   ✅ package.json found")
+            node_modules = desktop_gui_path / "node_modules"
+            if node_modules.exists():
+                print(f"   ✅ Dependencies installed")
+            else:
+                print(f"   ⚠️ Dependencies not installed (run 'npm install')")
+            print(f"   ✅ AI Cameraman GUI ready to launch")
         else:
-            print(f"   ⚠️ package.json missing")
+            print(f"   ❌ package.json missing")
     else:
-        print(f"   ⚠️ Desktop GUI not yet implemented (Phase 2)")
+        print(f"   ❌ Desktop GUI directory not found")
     
     print("\n" + "=" * 40)
 
