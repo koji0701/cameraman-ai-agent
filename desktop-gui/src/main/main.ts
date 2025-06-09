@@ -330,6 +330,8 @@ ipcMain.handle('delete-api-key', async () => {
   return saveConfig(config);
 });
 
+
+
 if (process.env.NODE_ENV === 'production') {
   const sourceMapSupport = require('source-map-support');
   sourceMapSupport.install();
@@ -372,11 +374,19 @@ const createWindow = async () => {
     show: false,
     width: 1024,
     height: 728,
+    minWidth: 800,
+    minHeight: 600,
+    transparent: true, // Make window background transparent
+    vibrancy: 'ultra-dark', // macOS vibrancy effect
+    visualEffectState: 'active', // Keep vibrancy active
+    titleBarStyle: 'hiddenInset', // Hide title bar but keep traffic lights
     icon: getAssetPath('icon.png'),
     webPreferences: {
       preload: app.isPackaged
         ? path.join(__dirname, 'preload.js')
         : path.join(__dirname, '../../.erb/dll/preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
     },
   });
 

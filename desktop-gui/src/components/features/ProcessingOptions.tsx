@@ -53,7 +53,7 @@ export function ProcessingOptions({ options, onOptionsChange, className }: Proce
   const Icon = currentPreset.icon;
 
   return (
-    <Card className={cn("glass-card border-glass-white/20 p-6", className)}>
+    <Card className={cn("glass-card border-glass-white/20 p-6 shadow-glass-lg", className)}>
       <div className="flex items-center space-x-3 mb-6">
         <div className={cn(
           "w-10 h-10 rounded-lg bg-gradient-to-br flex items-center justify-center",

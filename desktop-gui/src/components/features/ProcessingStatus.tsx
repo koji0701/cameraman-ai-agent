@@ -82,7 +82,7 @@ export function ProcessingStatus({
   return (
     <div className={cn("space-y-6", className)}>
       {/* Status Card */}
-      <Card className="glass-card border-glass-white/20 p-6">
+      <Card className="glass-card border-glass-white/20 p-6 shadow-glass-lg">
         <div className="flex items-center space-x-3 mb-6">
           <div className={cn(
             "w-10 h-10 rounded-lg bg-gradient-to-br flex items-center justify-center",
@@ -160,7 +160,7 @@ export function ProcessingStatus({
 
       {/* Logs Panel */}
       {showLogs && (
-        <Card className="glass-card border-glass-white/20 p-0 overflow-hidden">
+        <Card className="glass-card border-glass-white/20 p-0 overflow-hidden shadow-glass-lg animate-fade-in-up">
           <div className="p-4 border-b border-glass-white/20">
             <div className="flex items-center space-x-3">
               <Terminal className="w-5 h-5 text-muted-foreground" />

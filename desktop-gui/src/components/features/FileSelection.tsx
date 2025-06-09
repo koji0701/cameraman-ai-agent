@@ -54,7 +54,7 @@ export function FileSelection({
   return (
     <div className={cn("space-y-6", className)}>
       {/* File Selection Card */}
-      <Card className="glass-card border-glass-white/20 p-0 overflow-hidden">
+      <Card className="glass-card border-glass-white/20 p-0 overflow-hidden shadow-glass-lg">
         <div className="p-6">
           <div className="flex items-center space-x-3 mb-6">
             <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
@@ -131,7 +131,7 @@ export function FileSelection({
       </Card>
 
       {/* Output Path Card */}
-      <Card className="glass-card border-glass-white/20 p-6">
+      <Card className="glass-card border-glass-white/20 p-6 shadow-glass-lg">
         <div className="flex items-center space-x-3 mb-4">
           <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-orange-500 to-red-600 flex items-center justify-center">
             <Folder className="w-5 h-5 text-white" />

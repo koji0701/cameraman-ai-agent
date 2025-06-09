@@ -13,7 +13,8 @@ interface HeaderProps {
 export function Header({ hasApiKey, onOpenApiKeyModal, className }: HeaderProps) {
   return (
     <header className={cn(
-      "glass-card sticky top-0 z-50 border-0 backdrop-blur-xl bg-glass-white/5",
+      "glass-panel sticky top-0 z-50 border-b border-glass-white/10 backdrop-blur-xl",
+      "bg-gradient-to-r from-black/20 via-black/10 to-black/20",
       className
     )}>
       <div className="flex items-center justify-between p-6">

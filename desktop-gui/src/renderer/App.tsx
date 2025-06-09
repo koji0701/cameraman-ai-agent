@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { MemoryRouter as Router, Routes, Route } from 'react-router-dom';
 import { AppShell } from '@/components/layout/AppShell';
 import { Header } from '@/components/layout/Header';
+import { CenteredUploadSection } from '@/components/layout/CenteredUploadSection';
 import { FileSelection } from '@/components/features/FileSelection';
 import { ProcessingOptions } from '@/components/features/ProcessingOptions';
 import { ProcessingStatus } from '@/components/features/ProcessingStatus';
@@ -209,42 +210,61 @@ function AICameramanMain() {
 
   return (
     <AppShell>
-      <Header 
-        hasApiKey={hasApiKey}
-        onOpenApiKeyModal={handleOpenApiKeyModal}
-      />
-      
-      <main className="container mx-auto px-6 py-8 space-y-8 max-w-6xl">
-        
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Left Column */}
-          <div className="space-y-8">
-            <FileSelection
-              selectedFile={selectedFile}
-              outputPath={outputPath}
-              onSelectFile={handleSelectFile}
-              onOutputPathChange={setOutputPath}
-              onOpenOutputFolder={handleOpenOutputFolder}
-            />
-            
-            <ProcessingOptions
-              options={options}
-              onOptionsChange={updateOption}
-            />
-          </div>
+      {/* Conditional Layout based on file selection */}
+      {!selectedFile ? (
+        // Hero Upload Section - shown when no video is selected
+        <>
+          <Header 
+            hasApiKey={hasApiKey}
+            onOpenApiKeyModal={handleOpenApiKeyModal}
+          />
+          <CenteredUploadSection 
+            onSelectFile={handleSelectFile}
+          />
+        </>
+      ) : (
+        // Full Feature Layout - shown when video is selected
+        <>
+          <Header 
+            hasApiKey={hasApiKey}
+            onOpenApiKeyModal={handleOpenApiKeyModal}
+          />
           
-          {/* Right Column */}
-          <div className="space-y-8">
-            <ProcessingStatus
-              status={processingStatus}
-              logs={logs}
-              onProcess={handleProcessVideo}
-              onCancel={handleCancelProcessing}
-              canProcess={!!selectedFile && !!outputPath && hasApiKey}
-            />
-          </div>
-        </div>
-      </main>
+          <main className="container mx-auto px-6 py-8 space-y-8 max-w-6xl">
+            {/* File Selection - Compact version when file is selected */}
+            <div className="animate-fade-in-up">
+              <FileSelection
+                selectedFile={selectedFile}
+                outputPath={outputPath}
+                onSelectFile={handleSelectFile}
+                onOutputPathChange={setOutputPath}
+                onOpenOutputFolder={handleOpenOutputFolder}
+              />
+            </div>
+            
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              {/* Left Column */}
+              <div className="space-y-8 animate-slide-in-up" style={{ animationDelay: '0.1s' }}>
+                <ProcessingOptions
+                  options={options}
+                  onOptionsChange={updateOption}
+                />
+              </div>
+              
+              {/* Right Column */}
+              <div className="space-y-8 animate-slide-in-up" style={{ animationDelay: '0.2s' }}>
+                <ProcessingStatus
+                  status={processingStatus}
+                  logs={logs}
+                  onProcess={handleProcessVideo}
+                  onCancel={handleCancelProcessing}
+                  canProcess={!!selectedFile && !!outputPath && hasApiKey}
+                />
+              </div>
+            </div>
+          </main>
+        </>
+      )}
 
       <ApiKeyModal
         isOpen={showApiKeyModal}
