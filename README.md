@@ -11,7 +11,8 @@
 
 AI Cameraman automatically analyzes video footage and creates dynamically cropped videos that intelligently follow the action. By combining Google's Gemini 2.5 Flash for scene understanding with high-performance OpenCV processing, it delivers professional-quality results that capture the main action. 
 
-Available as both a **desktop GUI application** and **command-line interface** for maximum flexibility and ease of use.
+Available as both a **desktop GUI application** and **command-line interface** for maximum flexibility and ease of use. 
+Check out the (landing page source code)[https://github.com/koji0701/cameraman-landing-page] too.
 
 ## 🎬 Demo
 
